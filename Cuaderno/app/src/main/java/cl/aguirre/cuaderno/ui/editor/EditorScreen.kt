@@ -117,6 +117,7 @@ fun EditorScreen(
     var pageMenu by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showPenPanel by remember { mutableStateOf(false) }
 
     fun share(file: File?, mime: String) {
         if (file == null) return
@@ -232,6 +233,7 @@ fun EditorScreen(
                 state = state,
                 onOpenColor = { showColorPicker = true },
                 onOpenSettings = { showSettings = true },
+                onOpenPenPanel = { showPenPanel = true },
             )
 
             Box(Modifier.weight(1f)) {
@@ -297,18 +299,34 @@ fun EditorScreen(
         )
     }
 
-    if (showSettings) {
+    if (showPenPanel) {
         AlertDialog(
-            onDismissRequest = { showSettings = false },
-            title = { Text(stringResource(R.string.pen_settings)) },
+            onDismissRequest = { showPenPanel = false },
+            title = { Text(stringResource(TOOL_LABELS[state.tool] ?: R.string.pen_settings)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // La muestra va arriba y grande: es la referencia contra la
+                    // que se mueven los tres controles de abajo.
+                    StrokePreview(
+                        kind = state.tool.brushKind ?: BrushKind.PEN,
+                        sizeValue = state.sizeValue,
+                        color = state.colorLong.toComposeColor(),
+                        pressureGamma = state.pressureGamma,
+                        modifier = Modifier.fillMaxWidth().height(90.dp),
+                    )
+                    LabeledSlider(
+                        label = stringResource(R.string.size),
+                        hint = "",
+                        value = (state.sizeValue - 1) / 99f,
+                        onValueChange = { state.setSize((it * 99f + 1f).roundToInt()) },
+                        readout = "${state.sizeValue}%",
+                    )
                     LabeledSlider(
                         label = stringResource(R.string.pressure_sensitivity),
                         hint = stringResource(R.string.pressure_sensitivity_hint),
                         value = 1f - (state.pressureGamma - 0.4f) / 2f,
                         onValueChange = { state.pressureGamma = (1f - it) * 2f + 0.4f },
-                        readout = "%.2f".format(state.pressureGamma),
+                        readout = "${((1f - (state.pressureGamma - 0.4f) / 2f) * 100).roundToInt()}%",
                     )
                     LabeledSlider(
                         label = stringResource(R.string.stabilization),
@@ -317,7 +335,18 @@ fun EditorScreen(
                         onValueChange = { state.stabilization = it },
                         readout = "${(state.stabilization * 100).roundToInt()}%",
                     )
-                    Spacer(Modifier.height(8.dp))
+                }
+            },
+            confirmButton = { TextButton(onClick = { showPenPanel = false }) { Text("OK") } },
+        )
+    }
+
+    if (showSettings) {
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            title = { Text(stringResource(R.string.app_settings)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     SettingSwitch(
                         checked = state.scribbleToErase,
                         onCheckedChange = { state.scribbleToErase = it },
@@ -364,6 +393,9 @@ private val TOOLS: List<Triple<EditorTool, ImageVector, Int>> = listOf(
     Triple(EditorTool.PAN, Icons.Default.PanTool, R.string.tool_pan),
 )
 
+/** Nombre de cada herramienta, para titular su panel de ajustes. */
+private val TOOL_LABELS: Map<EditorTool, Int> = TOOLS.associate { it.first to it.third }
+
 @Composable
 private fun SettingSwitch(
     checked: Boolean,
@@ -403,11 +435,13 @@ private fun LabeledSlider(
             )
         }
         Slider(value = value.coerceIn(0f, 1f), onValueChange = onValueChange)
-        Text(
-            hint,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (hint.isNotEmpty()) {
+            Text(
+                hint,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -472,6 +506,7 @@ private fun ToolBar(
     state: EditorState,
     onOpenColor: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenPenPanel: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp) {
         Row(
@@ -483,7 +518,16 @@ private fun ToolBar(
             horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             for ((tool, icon, label) in TOOLS) {
-                ToolButton(state, tool, icon, label)
+                ToolButton(
+                    state = state,
+                    tool = tool,
+                    icon = icon,
+                    labelRes = label,
+                    // Tocar la herramienta ya activa abre sus ajustes. Asi el
+                    // grosor no ocupa la barra de forma permanente: solo aparece
+                    // cuando se lo busca, que es unas pocas veces por sesion.
+                    onReselect = onOpenPenPanel,
+                )
             }
 
             VerticalDivider(Modifier.height(40.dp).padding(horizontal = 8.dp))
@@ -496,32 +540,8 @@ private fun ToolBar(
                     .clickable { onOpenColor() },
             )
 
-            if (state.tool.isDrawing) {
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    state.sizeValue.toString(),
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.width(28.dp),
-                )
-                Slider(
-                    value = state.sizeValue.toFloat(),
-                    onValueChange = { state.setSize(it.roundToInt()) },
-                    valueRange = 1f..100f,
-                    modifier = Modifier.width(180.dp),
-                )
-                // Muestra viva del trazo: sin ella, el control de sensibilidad a
-                // la presion se ajusta probando en la hoja y borrando.
-                StrokePreview(
-                    kind = state.tool.brushKind ?: BrushKind.PEN,
-                    sizeValue = state.sizeValue,
-                    color = state.colorLong.toComposeColor(),
-                    pressureGamma = state.pressureGamma,
-                    modifier = Modifier.width(110.dp).height(40.dp),
-                )
-            }
-
             IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Default.Settings, stringResource(R.string.pen_settings))
+                Icon(Icons.Default.Settings, stringResource(R.string.app_settings))
             }
         }
     }
@@ -540,6 +560,7 @@ private fun ToolButton(
     tool: EditorTool,
     icon: ImageVector,
     labelRes: Int,
+    onReselect: () -> Unit,
 ) {
     val selected = state.tool == tool
     val label = stringResource(labelRes)
@@ -547,7 +568,9 @@ private fun ToolButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clip(RoundedCornerShape(10.dp))
-            .clickable { state.tool = tool }
+            .clickable {
+                if (selected && tool.isDrawing) onReselect() else state.tool = tool
+            }
             .background(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
             )

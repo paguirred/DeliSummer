@@ -43,6 +43,7 @@
     <string name="exporting">Exportando…</string>
     <string name="export_failed">No se pudo exportar</string>
     <string name="pen_settings">Ajustes del lápiz</string>
+    <string name="app_settings">Ajustes</string>
     <string name="pressure_sensitivity">Sensibilidad de presión</string>
     <string name="pressure_sensitivity_hint">Más a la derecha, el trazo engorda apretando menos.</string>
     <string name="stabilization">Estabilización del trazo</string>
