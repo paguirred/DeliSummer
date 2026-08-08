@@ -18,21 +18,31 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BorderColor
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Create
+import androidx.compose.material.icons.filled.CleaningServices
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentCut
+import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.GridOn
-import androidx.compose.material.icons.filled.Highlight
+import androidx.compose.material.icons.filled.HighlightAlt
+import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.PanTool
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ZoomOutMap
@@ -65,9 +75,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.FileProvider
 import cl.aguirre.cuaderno.R
@@ -79,6 +92,7 @@ import cl.aguirre.cuaderno.ink.PageCanvasView
 import cl.aguirre.cuaderno.ui.theme.toComposeColor
 import cl.aguirre.cuaderno.ui.theme.toPackedLong
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -100,6 +114,17 @@ fun EditorScreen(
     var pageMenu by remember { mutableStateOf(false) }
     var showColorPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+
+    fun share(file: File?, mime: String) {
+        if (file == null) return
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = mime
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(send, context.getString(R.string.share)))
+    }
 
     Scaffold(
         topBar = {
@@ -179,27 +204,15 @@ fun EditorScreen(
                         }
                     }
 
+                    IconButton(onClick = { canvasView?.fitWholePage() }) {
+                        Icon(Icons.Default.FitScreen, stringResource(R.string.fit_page))
+                    }
                     IconButton(onClick = { canvasView?.resetZoom() }) {
                         Icon(Icons.Default.ZoomOutMap, stringResource(R.string.zoom_reset))
                     }
 
                     IconButton(onClick = {
-                        scope.launch {
-                            val file = state.exportPdf() ?: return@launch
-                            val uri = FileProvider.getUriForFile(
-                                context,
-                                "${context.packageName}.fileprovider",
-                                file,
-                            )
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "application/pdf"
-                                putExtra(Intent.EXTRA_STREAM, uri)
-                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                            }
-                            context.startActivity(
-                                Intent.createChooser(send, context.getString(R.string.share)),
-                            )
-                        }
+                        scope.launch { share(state.exportPdf(), "application/pdf") }
                     }) { Icon(Icons.Default.Share, stringResource(R.string.export_pdf)) }
                 },
             )
@@ -224,6 +237,11 @@ fun EditorScreen(
                                     view.onStrokeFinished = { state.addStroke(it) }
                                     view.onErase = { state.erase(it) }
                                     view.onTransformChanged = { state.zoomFactor = it }
+                                    view.onLassoComplete = { state.selectFromLasso(it) }
+                                    view.onSelectionTransform = { matrix ->
+                                        state.transformSelection(matrix)
+                                        view.clearLiveTransform()
+                                    }
                                     canvasView = view
                                 }
                             },
@@ -235,17 +253,26 @@ fun EditorScreen(
                                 }
                                 view.pdfBackground = state.pdfBackground
                                 view.strokes = state.strokes
+                                view.selection = state.selection
                                 view.tool = state.tool
                                 view.colorLong = state.colorLong
                                 view.strokeSizePt = state.sizePt
                                 view.stylusOnly = state.stylusOnly
                                 view.stabilization = state.stabilization
                                 view.pressureGamma = state.pressureGamma
+                                view.scribbleToErase = state.scribbleToErase
                             },
                         )
                     }
-                    if (state.tool.isDrawing) {
-                        SizePanel(state, onOpenColor = { showColorPicker = true })
+
+                    when {
+                        state.selection.isNotEmpty() -> SelectionBar(
+                            state = state,
+                            onScreenshot = {
+                                scope.launch { share(state.exportSelectionImage(), "image/png") }
+                            },
+                        )
+                        state.tool.isDrawing -> SizePanel(state, onOpenColor = { showColorPicker = true })
                     }
                 }
             }
@@ -263,9 +290,7 @@ fun EditorScreen(
                     showAlpha = state.tool == EditorTool.HIGHLIGHTER,
                 )
             },
-            confirmButton = {
-                TextButton(onClick = { showColorPicker = false }) { Text("OK") }
-            },
+            confirmButton = { TextButton(onClick = { showColorPicker = false }) { Text("OK") } },
         )
     }
 
@@ -278,8 +303,6 @@ fun EditorScreen(
                     LabeledSlider(
                         label = stringResource(R.string.pressure_sensitivity),
                         hint = stringResource(R.string.pressure_sensitivity_hint),
-                        // Se invierte: mover a la derecha debe sentirse como
-                        // "mas sensible", y eso es una gamma mas baja.
                         value = 1f - (state.pressureGamma - 0.4f) / 2f,
                         onValueChange = { state.pressureGamma = (1f - it) * 2f + 0.4f },
                         readout = "%.2f".format(state.pressureGamma),
@@ -292,29 +315,21 @@ fun EditorScreen(
                         readout = "${(state.stabilization * 100).roundToInt()}%",
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Switch(
-                            checked = state.stylusOnly,
-                            onCheckedChange = { state.stylusOnly = it },
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text(
-                                stringResource(R.string.stylus_only),
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Text(
-                                stringResource(R.string.stylus_only_desc),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
+                    SettingSwitch(
+                        checked = state.scribbleToErase,
+                        onCheckedChange = { state.scribbleToErase = it },
+                        title = stringResource(R.string.scribble_to_erase),
+                        subtitle = stringResource(R.string.scribble_to_erase_desc),
+                    )
+                    SettingSwitch(
+                        checked = state.stylusOnly,
+                        onCheckedChange = { state.stylusOnly = it },
+                        title = stringResource(R.string.stylus_only),
+                        subtitle = stringResource(R.string.stylus_only_desc),
+                    )
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { showSettings = false }) { Text("OK") }
-            },
+            confirmButton = { TextButton(onClick = { showSettings = false }) { Text("OK") } },
         )
     }
 }
@@ -325,6 +340,40 @@ private val TEMPLATES = listOf(
     PageTemplate.DOTS to R.string.template_dots,
     PageTemplate.BLANK to R.string.template_blank,
 )
+
+private val TOOLS: List<Triple<EditorTool, ImageVector, Int>> = listOf(
+    Triple(EditorTool.PEN, Icons.Default.Draw, R.string.tool_pen),
+    Triple(EditorTool.FINELINER, Icons.Default.Edit, R.string.tool_fineliner),
+    Triple(EditorTool.MARKER, Icons.Default.Brush, R.string.tool_marker),
+    // BorderColor es un marcador con una franja de color debajo. Se usaba
+    // Highlight, que en Material es una ampolleta: nadie lo leia como resaltador.
+    Triple(EditorTool.HIGHLIGHTER, Icons.Default.BorderColor, R.string.tool_highlighter),
+    Triple(EditorTool.DASHED, Icons.Default.LinearScale, R.string.tool_dashed),
+    Triple(EditorTool.ERASER, Icons.Default.CleaningServices, R.string.tool_eraser),
+    Triple(EditorTool.LASSO, Icons.Default.HighlightAlt, R.string.tool_lasso),
+    Triple(EditorTool.PAN, Icons.Default.PanTool, R.string.tool_pan),
+)
+
+@Composable
+private fun SettingSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    title: String,
+    subtitle: String,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun LabeledSlider(
@@ -352,14 +401,55 @@ private fun LabeledSlider(
     }
 }
 
-/**
- * Panel de grosor y color de la herramienta activa.
- *
- * Vive abajo y no en la barra lateral porque la barra tiene que caber en
- * pantalla entera sin scroll para que las herramientas esten siempre a la vista;
- * meter tambien colores y grosores ahi era lo que dejaba el resaltador fuera de
- * cuadro en la primera version.
- */
+/** Acciones sobre lo seleccionado con el lazo. */
+@Composable
+private fun SelectionBar(state: EditorState, onScreenshot: () -> Unit) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                stringResource(R.string.selection_count, state.selection.size),
+                style = MaterialTheme.typography.labelLarge,
+            )
+            Spacer(Modifier.width(8.dp))
+
+            IconButton(onClick = { state.copySelection() }) {
+                Icon(Icons.Default.ContentCopy, stringResource(R.string.copy))
+            }
+            IconButton(onClick = { state.cutSelection() }) {
+                Icon(Icons.Default.ContentCut, stringResource(R.string.cut))
+            }
+            IconButton(onClick = { state.paste() }, enabled = state.hasClipboard) {
+                Icon(Icons.Default.ContentPaste, stringResource(R.string.paste))
+            }
+            IconButton(onClick = { state.duplicateSelection() }) {
+                Icon(Icons.Default.Add, stringResource(R.string.duplicate))
+            }
+            IconButton(onClick = onScreenshot) {
+                Icon(Icons.Default.PhotoCamera, stringResource(R.string.screenshot))
+            }
+            IconButton(onClick = { state.deleteSelection() }) {
+                Icon(Icons.Default.Delete, stringResource(R.string.delete))
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            Text(
+                stringResource(R.string.selection_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            IconButton(onClick = { state.clearSelection() }) {
+                Icon(Icons.Default.Close, stringResource(R.string.deselect))
+            }
+        }
+    }
+}
+
 @Composable
 private fun SizePanel(state: EditorState, onOpenColor: () -> Unit) {
     Surface(tonalElevation = 3.dp) {
@@ -376,10 +466,7 @@ private fun SizePanel(state: EditorState, onOpenColor: () -> Unit) {
                     .clickable { onOpenColor() },
             )
 
-            Text(
-                stringResource(R.string.size),
-                style = MaterialTheme.typography.labelLarge,
-            )
+            Text(stringResource(R.string.size), style = MaterialTheme.typography.labelLarge)
 
             Slider(
                 value = state.sizeValue.toFloat(),
@@ -394,14 +481,9 @@ private fun SizePanel(state: EditorState, onOpenColor: () -> Unit) {
                 modifier = Modifier.width(32.dp),
             )
 
-            // Muestra del trazo al tamaño y color elegidos, para no tener que
-            // probar en la hoja cada vez que se mueve el control.
-            Box(
-                Modifier.size(44.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                val diameter = (BrushCatalog.sizeToPoints(state.sizeValue) * 0.9f)
-                    .coerceIn(2f, 40f)
+            // Muestra del trazo al tamaño y color elegidos.
+            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                val diameter = (BrushCatalog.sizeToPoints(state.sizeValue) * 0.9f).coerceIn(2f, 40f)
                 Box(
                     Modifier
                         .size(diameter.dp)
@@ -420,21 +502,18 @@ private fun ToolRail(
 ) {
     Surface(
         tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxHeight().width(68.dp),
+        modifier = Modifier.fillMaxHeight().width(84.dp),
     ) {
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
                 .padding(vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            ToolButton(state, EditorTool.PEN, Icons.Default.Edit, R.string.tool_pen)
-            ToolButton(state, EditorTool.FINELINER, Icons.Default.Create, R.string.tool_fineliner)
-            ToolButton(state, EditorTool.MARKER, Icons.Default.Brush, R.string.tool_marker)
-            ToolButton(state, EditorTool.HIGHLIGHTER, Icons.Default.Highlight, R.string.tool_highlighter)
-            ToolButton(state, EditorTool.ERASER, Icons.Default.Clear, R.string.tool_eraser)
-            ToolButton(state, EditorTool.PAN, Icons.Default.PanTool, R.string.tool_pan)
+            for ((tool, icon, label) in TOOLS) {
+                ToolButton(state, tool, icon, label)
+            }
 
             HorizontalDivider(Modifier.padding(vertical = 6.dp))
 
@@ -453,25 +532,51 @@ private fun ToolRail(
     }
 }
 
+/**
+ * Boton de herramienta con su nombre debajo.
+ *
+ * La etiqueta ocupa espacio, pero sin ella hay que adivinar que hace cada icono:
+ * un pincel y un lapiz se parecen bastante en 24dp.
+ */
 @Composable
 private fun ToolButton(
     state: EditorState,
     tool: EditorTool,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     labelRes: Int,
 ) {
     val selected = state.tool == tool
-    FilledIconButton(
-        onClick = { state.tool = tool },
-        colors = if (selected) {
-            IconButtonDefaults.filledIconButtonColors()
-        } else {
-            IconButtonDefaults.filledIconButtonColors(
-                containerColor = Color.Transparent,
-                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    val label = stringResource(labelRes)
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable { state.tool = tool }
+            .background(
+                if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                RoundedCornerShape(10.dp),
             )
-        },
+            .padding(vertical = 4.dp, horizontal = 2.dp)
+            .width(76.dp),
     ) {
-        Icon(icon, contentDescription = stringResource(labelRes))
+        FilledIconButton(
+            onClick = { state.tool = tool },
+            colors = if (selected) {
+                IconButtonDefaults.filledIconButtonColors()
+            } else {
+                IconButtonDefaults.filledIconButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+        ) {
+            Icon(icon, contentDescription = label)
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            fontSize = 9.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+        )
     }
 }

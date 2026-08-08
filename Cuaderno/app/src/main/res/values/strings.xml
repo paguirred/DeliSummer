@@ -46,5 +46,28 @@
     <string name="pressure_sensitivity_hint">Más a la derecha, el trazo engorda apretando menos.</string>
     <string name="stabilization">Estabilización del trazo</string>
     <string name="stabilization_hint">Suaviza el pulso. Subirla mucho agrega retardo: la tinta empieza a ir detrás de la punta.</string>
+    <string name="scribble_to_erase">Tachar para borrar</string>
+    <string name="scribble_to_erase_desc">Hacer un borrón sobre algo con el lápiz lo elimina.</string>
+
+    <string name="tool_dashed">Punteado</string>
+    <string name="tool_lasso">Lazo</string>
+    <string name="fit_page">Ver hoja completa</string>
+
+    <string name="selection_count">%1$d seleccionados</string>
+    <string name="copy">Copiar</string>
+    <string name="cut">Cortar</string>
+    <string name="paste">Pegar</string>
+    <string name="duplicate">Duplicar</string>
+    <string name="screenshot">Captura</string>
+    <string name="deselect">Quitar selección</string>
+    <string name="selection_hint">Arrastra para mover. Pellizca con dos dedos para cambiar el tamaño.</string>
+
+    <string name="new_folder">Carpeta nueva</string>
+    <string name="folder_name">Nombre de la carpeta</string>
+    <string name="move_to_folder">Mover a carpeta</string>
+    <string name="no_folder">Sin carpeta</string>
+    <string name="confirm_delete_folder_title">¿Eliminar carpeta?</string>
+    <string name="confirm_delete_folder_body">Los cuadernos que contiene no se borran: vuelven a la lista principal.</string>
+    <string name="back">Volver</string>
     <string name="import_failed">No se pudo importar el PDF</string>
 </resources>

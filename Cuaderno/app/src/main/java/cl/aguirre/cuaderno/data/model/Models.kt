@@ -37,6 +37,27 @@ data class NotebookMeta(
     val updatedAt: Long,
     /** Nombre del PDF de fondo dentro de la carpeta del cuaderno, si lo tiene. */
     val pdfFileName: String? = null,
+    /** Carpeta que lo contiene, o null si esta en la raiz. */
+    val folderId: String? = null,
+)
+
+/**
+ * Una carpeta de la biblioteca, pensada para agrupar por ramo.
+ *
+ * Es solo una etiqueta, no un directorio real: los cuadernos siguen viviendo
+ * cada uno en su propia carpeta en disco. Asi, renombrar o borrar una carpeta
+ * nunca puede arrastrarse el contenido por error.
+ */
+@Serializable
+data class Folder(
+    val id: String,
+    val name: String,
+    val createdAt: Long,
+)
+
+@Serializable
+data class FolderIndex(
+    val folders: List<Folder> = emptyList(),
 )
 
 @Serializable

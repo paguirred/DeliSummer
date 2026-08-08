@@ -31,7 +31,10 @@ enum class BrushKind(val id: String) {
     MARKER("marker"),
 
     /** Translucido y ancho, se multiplica sobre lo que hay debajo. */
-    HIGHLIGHTER("highlighter");
+    HIGHLIGHTER("highlighter"),
+
+    /** Linea de trazos, util para ejes auxiliares y cotas en diagramas. */
+    DASHED("dashed");
 
     val family: BrushFamily
         get() = when (this) {
@@ -39,6 +42,7 @@ enum class BrushKind(val id: String) {
             FINELINER -> StockBrushes.marker()
             MARKER -> StockBrushes.marker()
             HIGHLIGHTER -> StockBrushes.highlighter()
+            DASHED -> StockBrushes.dashedLine()
         }
 
     /** True si el grosor del trazo responde a la fuerza del lapiz. */
@@ -101,5 +105,6 @@ object BrushCatalog {
         BrushKind.FINELINER -> 26
         BrushKind.MARKER -> 52
         BrushKind.HIGHLIGHTER -> 78
+        BrushKind.DASHED -> 30
     }
 }

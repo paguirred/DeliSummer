@@ -5,8 +5,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
@@ -21,6 +23,7 @@ import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import cl.aguirre.cuaderno.data.model.PageTemplate
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * El lienzo de una pagina.
@@ -29,14 +32,11 @@ import kotlin.math.max
  *
  *  - La capa mojada la maneja [InProgressStrokesView], que dibuja el trazo en
  *    curso con front buffer, sin esperar el ciclo normal de composicion.
- *  - La capa seca son los trazos ya terminados, que viven rasterizados en un
- *    bitmap de cache y se vuelcan de una sola pasada.
- *
- * Al levantar el lapiz el trazo pasa de una capa a la otra.
+ *  - La capa seca son los trazos ya terminados, rasterizados en un bitmap de
+ *    cache que se vuelca de una sola pasada.
  *
  * Los trazos se guardan en coordenadas de pagina (puntos PDF), nunca de pantalla.
- * El zoom y el desplazamiento viven solo en las matrices, asi que hacer zoom no
- * degrada la tinta ni cambia lo que se escribe en disco.
+ * El zoom y el desplazamiento viven solo en las matrices.
  */
 class PageCanvasView @JvmOverloads constructor(
     context: Context,
@@ -47,6 +47,7 @@ class PageCanvasView @JvmOverloads constructor(
     private val renderer = CanvasStrokeRenderer.create()
     private val predictor: MotionEventPredictor by lazy { MotionEventPredictor.newInstance(this) }
     private val conditioner = InputConditioner()
+    private val scribbleDetector = ScribbleDetector()
 
     // --- Estado de la pagina -------------------------------------------------
 
@@ -54,6 +55,16 @@ class PageCanvasView @JvmOverloads constructor(
         set(value) {
             if (field === value) return
             field = value
+            cacheValid = false
+            invalidate()
+        }
+
+    /** Trazos seleccionados con el lazo. Se dibujan aparte porque pueden moverse. */
+    var selection: Set<InkStroke> = emptySet()
+        set(value) {
+            if (field == value) return
+            field = value
+            cacheValid = false
             invalidate()
         }
 
@@ -61,57 +72,38 @@ class PageCanvasView @JvmOverloads constructor(
         set(value) {
             if (field == value) return
             field = value
+            cacheValid = false
             invalidate()
         }
 
     var pageWidthPt: Float = 595f
-        set(value) {
-            if (field == value) return
-            field = value
-            requestFit()
-        }
+        set(value) { if (field != value) { field = value; requestFit() } }
 
     var pageHeightPt: Float = 842f
-        set(value) {
-            if (field == value) return
-            field = value
-            requestFit()
-        }
+        set(value) { if (field != value) { field = value; requestFit() } }
 
-    /** Fondo rasterizado de la pagina del PDF, si el cuaderno viene de uno. */
     var pdfBackground: Bitmap? = null
-        set(value) {
-            if (field === value) return
-            field = value
-            invalidate()
-        }
+        set(value) { if (field !== value) { field = value; invalidate() } }
 
     // --- Herramienta ---------------------------------------------------------
 
     var tool: EditorTool = EditorTool.PEN
     var colorLong: Long = Color.pack(Color.BLACK)
-    // defaultSize devuelve el valor 1..100 de la UI; aqui se necesitan puntos.
     var strokeSizePt: Float =
         BrushCatalog.sizeToPoints(BrushCatalog.defaultSize(BrushKind.PEN))
-
-    /** Radio del borrador en puntos de pagina. */
     var eraserRadiusPt: Float = 10f
 
-    /** 0 = sin estabilizacion, 1 = maxima. */
+    /** Tachar con el lapiz borra lo que hay debajo. */
+    var scribbleToErase: Boolean = true
+
     var stabilization: Float
         get() = conditioner.stabilization
         set(value) { conditioner.stabilization = value.coerceIn(0f, 1f) }
 
-    /** Menor a 1 engorda el trazo antes; mayor a 1 exige apretar mas. */
     var pressureGamma: Float
         get() = conditioner.pressureGamma
         set(value) { conditioner.pressureGamma = value.coerceIn(0.2f, 4f) }
 
-    /**
-     * Si esta activo, el dedo nunca dibuja: solo hace zoom y desplaza. Es el
-     * modo correcto cuando hay lapiz, porque ademas hace que apoyar la mano en
-     * la pantalla no deje marcas.
-     */
     var stylusOnly: Boolean = true
 
     // --- Callbacks -----------------------------------------------------------
@@ -119,6 +111,8 @@ class PageCanvasView @JvmOverloads constructor(
     var onStrokeFinished: ((InkStroke) -> Unit)? = null
     var onErase: ((List<InkStroke>) -> Unit)? = null
     var onTransformChanged: ((zoom: Float) -> Unit)? = null
+    var onLassoComplete: ((polygon: FloatArray) -> Unit)? = null
+    var onSelectionTransform: ((Matrix) -> Unit)? = null
 
     // --- Transformacion pagina <-> vista -------------------------------------
 
@@ -128,21 +122,11 @@ class PageCanvasView @JvmOverloads constructor(
     private var panX = 0f
     private var panY = 0f
     private var fitZoom = 1f
+    private var minZoom = 0.1f
     private var needsFit = true
-
-    private val minZoomFactor = 1f
-    private val maxZoomFactor = 8f
 
     // --- Cache de la capa seca -----------------------------------------------
 
-    /**
-     * Los trazos secos se rasterizan una vez y despues solo se vuelcan.
-     *
-     * Sin esto, cada frame vuelve a recorrer y rasterizar la pagina completa: con
-     * la hoja vacia no se nota, pero a media pagina de apuntes el dibujado se
-     * degrada justo mientras alguien escribe, que es cuando peor se siente.
-     * Al terminar un trazo se pinta solo ese trazo encima del cache.
-     */
     private var dryCache: Bitmap? = null
     private var dryCanvas: Canvas? = null
     private var drawnCount = 0
@@ -159,10 +143,37 @@ class PageCanvasView @JvmOverloads constructor(
         isAntiAlias = true
         isFilterBitmap = true
     }
-    private val identity = Matrix()
+    private val lassoPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = Color.parseColor("#1B57B8")
+        pathEffect = DashPathEffect(floatArrayOf(12f, 8f), 0f)
+    }
+    private val lassoFill = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.FILL
+        color = Color.parseColor("#221B57B8")
+    }
+    private val selectionPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = Color.parseColor("#1B57B8")
+        pathEffect = DashPathEffect(floatArrayOf(10f, 6f), 0f)
+    }
+    private val handlePaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.FILL
+        color = Color.parseColor("#1B57B8")
+    }
+
+    private val combined = Matrix()
     private val pageRect = RectF()
     private val srcRect = Rect()
     private val destRect = RectF()
+    private val lassoPath = Path()
+    private val selectionRect = RectF()
 
     // --- Entrada -------------------------------------------------------------
 
@@ -170,6 +181,18 @@ class PageCanvasView @JvmOverloads constructor(
     private var currentStrokeId: InProgressStrokeId? = null
     private val hitPathBuilder = HitPathBuilder()
     private val tmpPoint = FloatArray(2)
+
+    /** Mientras dura un tachon, el trazo se descarta y se pasa a borrar. */
+    private var scribbleErasing = false
+
+    private var lassoBuilder: HitPathBuilder? = null
+    private var lassoLive: FloatArray? = null
+
+    /** Transformacion en curso de la seleccion, aun sin confirmar. */
+    private val liveTransform = Matrix()
+    private var movingSelection = false
+    private var lastMoveX = 0f
+    private var lastMoveY = 0f
 
     private var lastPanFocusX = 0f
     private var lastPanFocusY = 0f
@@ -179,7 +202,11 @@ class PageCanvasView @JvmOverloads constructor(
         context,
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
-                applyZoom(detector.scaleFactor, detector.focusX, detector.focusY)
+                if (movingSelection) {
+                    scaleSelection(detector.scaleFactor, detector.focusX, detector.focusY)
+                } else {
+                    applyZoom(detector.scaleFactor, detector.focusX, detector.focusY)
+                }
                 return true
             }
         },
@@ -192,7 +219,7 @@ class PageCanvasView @JvmOverloads constructor(
         inProgressView.addFinishedStrokesListener(this)
     }
 
-    // --- Ciclo de vida de la vista -------------------------------------------
+    // --- Ciclo de vida -------------------------------------------------------
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
@@ -220,11 +247,18 @@ class PageCanvasView @JvmOverloads constructor(
         invalidate()
     }
 
-    /** Encuadra la pagina a lo ancho, con un margen para que respire. */
     fun fitToWidth() {
         if (width == 0 || pageWidthPt <= 0f) return
         val margin = 24f
         fitZoom = (width - margin * 2) / pageWidthPt
+        // El piso del zoom permite ver la hoja completa y algo mas de aire.
+        // Antes el piso era el propio encuadre a lo ancho, asi que en una hoja
+        // vertical no habia forma de ver el pie de la pagina de un vistazo.
+        val fitWholePage = min(
+            (width - margin * 2) / pageWidthPt,
+            (height - margin * 2) / pageHeightPt,
+        )
+        minZoom = min(fitZoom, fitWholePage) * 0.85f
         zoom = fitZoom
         panX = margin
         panY = margin
@@ -232,11 +266,23 @@ class PageCanvasView @JvmOverloads constructor(
         updateMatrices()
     }
 
+    /** Encuadra la hoja entera. */
+    fun fitWholePage() {
+        if (width == 0 || height == 0) return
+        val margin = 24f
+        zoom = min(
+            (width - margin * 2) / pageWidthPt,
+            (height - margin * 2) / pageHeightPt,
+        )
+        panX = (width - pageWidthPt * zoom) / 2f
+        panY = (height - pageHeightPt * zoom) / 2f
+        updateMatrices()
+    }
+
     private fun applyZoom(factor: Float, focusX: Float, focusY: Float) {
-        val target = (zoom * factor).coerceIn(fitZoom * minZoomFactor, fitZoom * maxZoomFactor)
+        val target = (zoom * factor).coerceIn(minZoom, fitZoom * MAX_ZOOM_FACTOR)
         val actual = target / zoom
         if (actual == 1f) return
-        // Mantener fijo el punto bajo los dedos mientras se hace zoom.
         panX = focusX - (focusX - panX) * actual
         panY = focusY - (focusY - panY) * actual
         zoom = target
@@ -255,32 +301,19 @@ class PageCanvasView @JvmOverloads constructor(
         pageToView.postScale(zoom, zoom)
         pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
-        // El cache esta rasterizado para una transformacion concreta: al cambiar
-        // el zoom o el desplazamiento hay que rehacerlo.
         cacheValid = false
         onTransformChanged?.invoke(if (fitZoom > 0f) zoom / fitZoom else 1f)
         invalidate()
     }
 
-    /** Evita que la pagina se pierda fuera de la pantalla al desplazar. */
     private fun clampPan() {
         val scaledW = pageWidthPt * zoom
         val scaledH = pageHeightPt * zoom
-        panX = if (scaledW <= width) {
-            (width - scaledW) / 2f
-        } else {
-            panX.coerceIn(width - scaledW, 0f)
-        }
-        panY = if (scaledH <= height) {
-            max((height - scaledH) / 2f, 0f)
-        } else {
-            panY.coerceIn(height - scaledH, 0f)
-        }
+        panX = if (scaledW <= width) (width - scaledW) / 2f else panX.coerceIn(width - scaledW, 0f)
+        panY = if (scaledH <= height) (height - scaledH) / 2f else panY.coerceIn(height - scaledH, 0f)
     }
 
-    fun resetZoom() {
-        fitToWidth()
-    }
+    fun resetZoom() = fitToWidth()
 
     // --- Render --------------------------------------------------------------
 
@@ -290,7 +323,6 @@ class PageCanvasView @JvmOverloads constructor(
         pageRect.set(0f, 0f, pageWidthPt, pageHeightPt)
         pageToView.mapRect(pageRect)
 
-        // Sombra suave para que la hoja se lea como una hoja sobre el escritorio.
         canvas.drawRoundRect(
             pageRect.left - 1f, pageRect.top - 1f,
             pageRect.right + 3f, pageRect.bottom + 3f,
@@ -311,42 +343,88 @@ class PageCanvasView @JvmOverloads constructor(
 
         syncDryCache()
         dryCache?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+
+        // Los seleccionados van fuera del cache porque se mueven en vivo.
+        if (selection.isNotEmpty()) {
+            for (inkStroke in strokes) {
+                if (inkStroke !in selection) continue
+                combined.set(pageToView)
+                combined.preConcat(liveTransform)
+                combined.preConcat(inkStroke.transform)
+                renderer.draw(canvas, inkStroke.stroke, combined)
+            }
+            drawSelectionFrame(canvas)
+        }
+
+        lassoLive?.let { points ->
+            if (points.size >= 4) {
+                lassoPath.reset()
+                lassoPath.moveTo(points[0], points[1])
+                var i = 2
+                while (i + 1 < points.size) {
+                    lassoPath.lineTo(points[i], points[i + 1])
+                    i += 2
+                }
+                lassoPath.close()
+                canvas.save()
+                canvas.concat(pageToView)
+                canvas.drawPath(lassoPath, lassoFill)
+                canvas.restore()
+                // El contorno se dibuja sin escalar para que el grosor del
+                // punteado se vea igual con cualquier zoom.
+                lassoPath.transform(pageToView)
+                canvas.drawPath(lassoPath, lassoPaint)
+            }
+        }
     }
 
-    /**
-     * Deja el cache al dia. Si lo unico que paso es que se agregaron trazos al
-     * final, pinta solo esos; si hubo borrado, deshacer o cambio de zoom, rehace
-     * la pagina completa.
-     */
+    private fun drawSelectionFrame(canvas: Canvas) {
+        val box = selectionBoundsInView() ?: return
+        canvas.drawRect(box, selectionPaint)
+        val r = HANDLE_RADIUS_PX
+        canvas.drawCircle(box.right, box.bottom, r, handlePaint)
+        canvas.drawCircle(box.left, box.top, r, handlePaint)
+    }
+
+    private fun selectionBoundsInView(): RectF? {
+        if (selection.isEmpty()) return null
+        val box = RectF(Float.MAX_VALUE, Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE)
+        for (s in selection) {
+            box.left = min(box.left, s.bounds.left)
+            box.top = min(box.top, s.bounds.top)
+            box.right = max(box.right, s.bounds.right)
+            box.bottom = max(box.bottom, s.bounds.bottom)
+        }
+        if (box.left > box.right) return null
+        liveTransform.mapRect(box)
+        pageToView.mapRect(box)
+        box.inset(-10f, -10f)
+        return box
+    }
+
     private fun syncDryCache() {
         val target = dryCanvas ?: return
+        val dry = if (selection.isEmpty()) strokes else strokes.filter { it !in selection }
 
         val appendOnly = cacheValid &&
-            strokes.size >= drawnCount &&
-            (drawnCount == 0 || strokes.getOrNull(drawnCount - 1) === drawnLast)
+            dry.size >= drawnCount &&
+            (drawnCount == 0 || dry.getOrNull(drawnCount - 1) === drawnLast)
 
         if (!appendOnly) {
             dryCache?.eraseColor(Color.TRANSPARENT)
             drawnCount = 0
-        } else if (drawnCount == strokes.size) {
+        } else if (drawnCount == dry.size) {
             return
         }
 
-        target.save()
-        target.concat(pageToView)
-        for (i in drawnCount until strokes.size) {
-            // El canvas ya lleva la transformacion; la matriz se pasa igual
-            // porque el renderizador la usa para elegir el nivel de detalle.
-            renderer.draw(
-                canvas = target,
-                stroke = strokes[i].stroke,
-                strokeToScreenTransform = pageToView,
-            )
+        for (i in drawnCount until dry.size) {
+            combined.set(pageToView)
+            combined.preConcat(dry[i].transform)
+            renderer.draw(canvas = target, stroke = dry[i].stroke, strokeToScreenTransform = combined)
         }
-        target.restore()
 
-        drawnCount = strokes.size
-        drawnLast = strokes.lastOrNull()
+        drawnCount = dry.size
+        drawnLast = dry.lastOrNull()
         cacheValid = true
     }
 
@@ -359,7 +437,6 @@ class PageCanvasView @JvmOverloads constructor(
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS
         val isPenEraser = toolType == MotionEvent.TOOL_TYPE_ERASER
 
-        // Rechazo de palma: mientras el lapiz esta apoyado, el dedo no existe.
         val drawingWithStylus = activeStylusPointerId != MotionEvent.INVALID_POINTER_ID
         if (drawingWithStylus && !isStylus && !isPenEraser) return true
 
@@ -367,15 +444,113 @@ class PageCanvasView @JvmOverloads constructor(
         val fingerMayDraw = !stylusOnly && toolType == MotionEvent.TOOL_TYPE_FINGER
 
         return when {
+            tool == EditorTool.LASSO -> handleLassoTool(event)
+
             (isPenEraser || tool == EditorTool.ERASER) && (penInput || fingerMayDraw) ->
                 handleErase(event)
 
-            tool.isDrawing && (penInput || fingerMayDraw) ->
-                handleInk(event)
+            tool.isDrawing && (penInput || fingerMayDraw) -> handleInk(event)
 
             else -> handleNavigation(event)
         }
     }
+
+    // --- Lazo y seleccion ----------------------------------------------------
+
+    private fun handleLassoTool(event: MotionEvent): Boolean {
+        // Con dos dedos siempre se transforma o navega, nunca se dibuja el lazo.
+        if (event.pointerCount > 1) {
+            movingSelection = selection.isNotEmpty()
+            scaleDetector.onTouchEvent(event)
+            if (!movingSelection) return handleNavigation(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP ||
+                event.actionMasked == MotionEvent.ACTION_CANCEL
+            ) {
+                commitSelectionTransform()
+            }
+            return true
+        }
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                toPageCoords(event.getX(0), event.getY(0))
+                val inside = selectionBoundsInView()?.contains(event.getX(0), event.getY(0)) == true
+                if (inside) {
+                    movingSelection = true
+                    lastMoveX = event.getX(0)
+                    lastMoveY = event.getY(0)
+                } else {
+                    if (selection.isNotEmpty()) onLassoComplete?.invoke(FloatArray(0))
+                    movingSelection = false
+                    lassoBuilder = HitPathBuilder(minDistance = 3f).also {
+                        it.add(tmpPoint[0], tmpPoint[1])
+                    }
+                    lassoLive = lassoBuilder?.snapshot()
+                    invalidate()
+                }
+            }
+
+            MotionEvent.ACTION_MOVE -> {
+                if (movingSelection) {
+                    val dx = event.getX(0) - lastMoveX
+                    val dy = event.getY(0) - lastMoveY
+                    lastMoveX = event.getX(0)
+                    lastMoveY = event.getY(0)
+                    // El arrastre viene en pixeles y la seleccion vive en puntos.
+                    liveTransform.postTranslate(dx / zoom, dy / zoom)
+                    invalidate()
+                } else {
+                    val builder = lassoBuilder ?: return true
+                    for (h in 0 until event.historySize) {
+                        toPageCoords(event.getHistoricalX(0, h), event.getHistoricalY(0, h))
+                        builder.add(tmpPoint[0], tmpPoint[1])
+                    }
+                    toPageCoords(event.getX(0), event.getY(0))
+                    builder.add(tmpPoint[0], tmpPoint[1])
+                    lassoLive = builder.snapshot()
+                    invalidate()
+                }
+            }
+
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (movingSelection) {
+                    commitSelectionTransform()
+                } else {
+                    val polygon = lassoBuilder?.build() ?: FloatArray(0)
+                    lassoBuilder = null
+                    lassoLive = null
+                    if (polygon.size >= 6) onLassoComplete?.invoke(polygon)
+                    invalidate()
+                }
+            }
+        }
+        return true
+    }
+
+    private fun scaleSelection(factor: Float, focusX: Float, focusY: Float) {
+        toPageCoords(focusX, focusY)
+        liveTransform.postScale(factor, factor, tmpPoint[0], tmpPoint[1])
+        invalidate()
+    }
+
+    private fun commitSelectionTransform() {
+        movingSelection = false
+        if (liveTransform.isIdentity) return
+        onSelectionTransform?.invoke(Matrix(liveTransform))
+        liveTransform.reset()
+        cacheValid = false
+        invalidate()
+    }
+
+    /** Limpia la transformacion en vivo tras confirmarla desde el estado. */
+    fun clearLiveTransform() {
+        liveTransform.reset()
+        cacheValid = false
+        invalidate()
+    }
+
+    // --- Tinta ---------------------------------------------------------------
 
     private fun handleInk(event: MotionEvent): Boolean {
         val index = event.actionIndex
@@ -384,8 +559,6 @@ class PageCanvasView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 if (activeStylusPointerId != MotionEvent.INVALID_POINTER_ID) return true
-                // Pide al sistema entregar los eventos sin agrupar por frame.
-                // Es una de las palancas mas directas contra la latencia.
                 requestUnbufferedDispatch(event)
                 parent?.requestDisallowInterceptTouchEvent(true)
 
@@ -395,6 +568,8 @@ class PageCanvasView @JvmOverloads constructor(
                 activeStylusPointerId = pointerId
                 hitPathBuilder.reset()
                 conditioner.reset()
+                scribbleDetector.reset()
+                scribbleErasing = false
 
                 val conditioned = conditioner.condition(event, index)
                 val source = conditioned ?: event
@@ -405,12 +580,14 @@ class PageCanvasView @JvmOverloads constructor(
                     pointerId = pointerId,
                     brush = brush,
                     motionEventToWorldTransform = viewToPage,
-                    strokeToWorldTransform = identity,
+                    strokeToWorldTransform = Matrix(),
                 )
                 conditioned?.recycle()
             }
 
             MotionEvent.ACTION_MOVE -> {
+                if (scribbleErasing) return eraseAlong(event)
+
                 val strokeId = currentStrokeId ?: return true
                 val moveIndex = pointerIndexOf(event, activeStylusPointerId)
                 if (moveIndex < 0) return true
@@ -419,17 +596,20 @@ class PageCanvasView @JvmOverloads constructor(
                 val source = conditioned ?: event
                 val sourceIndex = source.findPointerIndex(activeStylusPointerId).coerceAtLeast(0)
 
-                // Los puntos historicos son las muestras que el sensor entrego
-                // entre dos frames. Ignorarlos es lo que hace que las curvas
-                // salgan poligonales en tantas apps de dibujo.
                 for (h in 0 until source.historySize) {
                     recordHistoricalHitPoint(source, sourceIndex, h)
                 }
                 recordHitPoint(source, sourceIndex)
 
-                // La prediccion adelanta unos milisegundos la punta del trazo, que
-                // es lo que cierra la brecha visual entre la punta del lapiz y la
-                // tinta. El evento predicho lo administra el predictor.
+                if (scribbleToErase && detectScribble()) {
+                    // Es un tachon: se descarta el garabato y se borra debajo.
+                    inProgressView.cancelStroke(strokeId, event)
+                    currentStrokeId = null
+                    scribbleErasing = true
+                    conditioned?.recycle()
+                    return eraseAlongPath(hitPathBuilder.snapshot())
+                }
+
                 predictor.record(source)
                 val predicted = predictor.predict()
                 inProgressView.addToStroke(source, activeStylusPointerId, strokeId, predicted)
@@ -437,20 +617,26 @@ class PageCanvasView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                activeStylusPointerId = MotionEvent.INVALID_POINTER_ID
+                if (scribbleErasing) {
+                    scribbleErasing = false
+                    hitPathBuilder.reset()
+                    return true
+                }
                 val strokeId = currentStrokeId ?: return true
-                if (pointerId != activeStylusPointerId) return true
+                if (pointerId != event.getPointerId(index)) return true
                 val conditioned = conditioner.condition(event, index)
                 val source = conditioned ?: event
                 recordHitPoint(source, source.findPointerIndex(pointerId).coerceAtLeast(0))
                 inProgressView.finishStroke(source, pointerId, strokeId)
                 conditioned?.recycle()
-                activeStylusPointerId = MotionEvent.INVALID_POINTER_ID
             }
 
             MotionEvent.ACTION_CANCEL -> {
                 currentStrokeId?.let { inProgressView.cancelStroke(it, event) }
                 currentStrokeId = null
                 activeStylusPointerId = MotionEvent.INVALID_POINTER_ID
+                scribbleErasing = false
                 hitPathBuilder.reset()
                 conditioner.reset()
             }
@@ -458,23 +644,45 @@ class PageCanvasView @JvmOverloads constructor(
         return true
     }
 
+    private fun detectScribble(): Boolean {
+        val path = hitPathBuilder.snapshot()
+        if (path.size < 4) return false
+        // Solo hace falta alimentar el ultimo punto: el detector es incremental.
+        return scribbleDetector.accept(path[path.size - 2], path[path.size - 1])
+    }
+
+    // --- Borrado -------------------------------------------------------------
+
     private fun handleErase(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
-                val index = 0
-                val removed = ArrayList<InkStroke>()
-
-                for (h in 0 until event.historySize) {
-                    toPageCoords(event.getHistoricalX(index, h), event.getHistoricalY(index, h))
-                    collectHits(tmpPoint[0], tmpPoint[1], removed)
-                }
-                toPageCoords(event.getX(index), event.getY(index))
-                collectHits(tmpPoint[0], tmpPoint[1], removed)
-
-                if (removed.isNotEmpty()) onErase?.invoke(removed)
+                return eraseAlong(event)
             }
         }
+        return true
+    }
+
+    private fun eraseAlong(event: MotionEvent): Boolean {
+        val removed = ArrayList<InkStroke>()
+        for (h in 0 until event.historySize) {
+            toPageCoords(event.getHistoricalX(0, h), event.getHistoricalY(0, h))
+            collectHits(tmpPoint[0], tmpPoint[1], removed)
+        }
+        toPageCoords(event.getX(0), event.getY(0))
+        collectHits(tmpPoint[0], tmpPoint[1], removed)
+        if (removed.isNotEmpty()) onErase?.invoke(removed)
+        return true
+    }
+
+    private fun eraseAlongPath(path: FloatArray): Boolean {
+        val removed = ArrayList<InkStroke>()
+        var i = 0
+        while (i + 1 < path.size) {
+            collectHits(path[i], path[i + 1], removed)
+            i += 2
+        }
+        if (removed.isNotEmpty()) onErase?.invoke(removed)
         return true
     }
 
@@ -484,6 +692,8 @@ class PageCanvasView @JvmOverloads constructor(
             if (inkStroke.hits(x, y, eraserRadiusPt)) into.add(inkStroke)
         }
     }
+
+    // --- Navegacion ----------------------------------------------------------
 
     private fun handleNavigation(event: MotionEvent): Boolean {
         scaleDetector.onTouchEvent(event)
@@ -535,10 +745,7 @@ class PageCanvasView @JvmOverloads constructor(
 
     private fun recordHistoricalHitPoint(event: MotionEvent, index: Int, historyPos: Int) {
         if (index < 0 || index >= event.pointerCount) return
-        toPageCoords(
-            event.getHistoricalX(index, historyPos),
-            event.getHistoricalY(index, historyPos),
-        )
+        toPageCoords(event.getHistoricalX(index, historyPos), event.getHistoricalY(index, historyPos))
         hitPathBuilder.add(tmpPoint[0], tmpPoint[1])
     }
 
@@ -555,8 +762,6 @@ class PageCanvasView @JvmOverloads constructor(
         for ((_, stroke) in strokes) {
             onStrokeFinished?.invoke(InkStroke(stroke, path))
         }
-        // El trazo ya vive en la capa seca; sacarlo de la mojada evita dibujarlo
-        // dos veces y libera el buffer para el siguiente.
         inProgressView.removeFinishedStrokes(strokes.keys)
         currentStrokeId = null
         invalidate()
@@ -568,6 +773,10 @@ class PageCanvasView @JvmOverloads constructor(
         super.onDetachedFromWindow()
     }
 
-    /** Zoom actual como multiplo del encuadre inicial, para mostrarlo en la UI. */
     val zoomFactor: Float get() = if (fitZoom > 0f) zoom / fitZoom else 1f
+
+    private companion object {
+        const val MAX_ZOOM_FACTOR = 8f
+        const val HANDLE_RADIUS_PX = 10f
+    }
 }

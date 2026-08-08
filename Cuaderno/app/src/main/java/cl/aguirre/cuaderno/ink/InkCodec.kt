@@ -1,5 +1,6 @@
 package cl.aguirre.cuaderno.ink
 
+import android.graphics.Matrix
 import androidx.ink.brush.Brush
 import androidx.ink.brush.BrushFamily
 import androidx.ink.storage.decode
@@ -30,7 +31,15 @@ import java.io.IOException
 object InkCodec {
 
     private const val MAGIC = 0x43554144 // "CUAD"
-    private const val VERSION = 1
+
+    /**
+     * v1: trazos sin transformacion.
+     * v2: se agrega la matriz de cada trazo, para poder mover y escalar lo
+     *     escrito sin reconstruir su geometria.
+     *
+     * Los archivos v1 se siguen leyendo: su matriz es la identidad.
+     */
+    private const val VERSION = 2
 
     private val familyToKind: Map<BrushFamily, BrushKind> by lazy {
         BrushKind.entries.associateBy { it.family }
@@ -53,6 +62,10 @@ object InkCodec {
 
                 out.writeInt(inkStroke.hitPath.size)
                 for (v in inkStroke.hitPath) out.writeFloat(v)
+
+                val matrix = FloatArray(9)
+                inkStroke.transform.getValues(matrix)
+                for (v in matrix) out.writeFloat(v)
 
                 val encoded = ByteArrayOutputStream().use { buffer ->
                     inkStroke.stroke.inputs.encode(buffer)
@@ -90,6 +103,13 @@ object InkCodec {
                         val hitPath = FloatArray(input.readInt())
                         for (i in hitPath.indices) hitPath[i] = input.readFloat()
 
+                        val transform = Matrix()
+                        if (version >= 2) {
+                            val values = FloatArray(9)
+                            for (i in values.indices) values[i] = input.readFloat()
+                            transform.setValues(values)
+                        }
+
                         val encoded = ByteArray(input.readInt())
                         input.readFully(encoded)
                         val inputs = ByteArrayInputStream(encoded).use { bytes ->
@@ -102,7 +122,7 @@ object InkCodec {
                             size = size,
                             epsilon = epsilon,
                         )
-                        add(InkStroke(Stroke(brush = brush, inputs = inputs), hitPath))
+                        add(InkStroke(Stroke(brush = brush, inputs = inputs), hitPath, transform))
                     }
                 }
             }

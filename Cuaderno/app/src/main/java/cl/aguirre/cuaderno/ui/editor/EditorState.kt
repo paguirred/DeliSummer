@@ -15,6 +15,7 @@ import cl.aguirre.cuaderno.ink.BrushCatalog
 import cl.aguirre.cuaderno.ink.BrushKind
 import cl.aguirre.cuaderno.ink.EditorTool
 import cl.aguirre.cuaderno.ink.InkStroke
+import cl.aguirre.cuaderno.pdf.ImageExporter
 import cl.aguirre.cuaderno.pdf.PdfExporter
 import cl.aguirre.cuaderno.pdf.PdfPageSource
 import kotlinx.coroutines.CoroutineScope
@@ -64,6 +65,9 @@ class EditorState(
      * sensible), mayor a 1 exige apretar mas.
      */
     var pressureGamma by mutableStateOf(1f)
+
+    /** Tachar con el lapiz borra lo que hay debajo. */
+    var scribbleToErase by mutableStateOf(true)
 
     /** Cada herramienta recuerda su propio color y grosor. */
     private val toolColors = mutableStateMapOf<EditorTool, Long>()
@@ -157,7 +161,7 @@ class EditorState(
 
     fun addStroke(stroke: InkStroke) {
         strokes = strokes + stroke
-        push(InkOp.Add(stroke))
+        push(InkOp.AddMany(listOf(stroke)))
         scheduleSave()
     }
 
@@ -174,8 +178,86 @@ class EditorState(
         scheduleSave()
     }
 
+    // --- Seleccion -----------------------------------------------------------
+
+    var selection by mutableStateOf<Set<InkStroke>>(emptySet())
+        private set
+
+    private var clipboard: List<InkStroke> = emptyList()
+    val hasClipboard: Boolean get() = clipboard.isNotEmpty()
+
+    fun selectFromLasso(polygon: FloatArray) {
+        selection = if (polygon.size < 6) {
+            emptySet()
+        } else {
+            strokes.filter { it.isInside(polygon) }.toSet()
+        }
+    }
+
+    fun clearSelection() { selection = emptySet() }
+
+    /** Aplica una transformacion confirmada a los trazos seleccionados. */
+    fun transformSelection(matrix: android.graphics.Matrix) {
+        if (selection.isEmpty()) return
+        val changes = ArrayList<Triple<Int, InkStroke, InkStroke>>()
+        strokes.forEachIndexed { index, stroke ->
+            if (stroke in selection) changes.add(Triple(index, stroke, stroke.transformedBy(matrix)))
+        }
+        if (changes.isEmpty()) return
+        val op = InkOp.Replace(changes)
+        strokes = op.apply(strokes)
+        // La seleccion tiene que apuntar a los objetos nuevos, no a los de antes.
+        selection = changes.map { it.third }.toSet()
+        push(op)
+        scheduleSave()
+    }
+
+    fun deleteSelection() {
+        if (selection.isEmpty()) return
+        val removed = strokes.withIndex()
+            .filter { it.value in selection }
+            .map { IndexedValue(it.index, it.value) }
+        if (removed.isEmpty()) return
+        val op = InkOp.Remove(removed)
+        strokes = op.apply(strokes)
+        selection = emptySet()
+        push(op)
+        scheduleSave()
+    }
+
+    fun copySelection() {
+        if (selection.isNotEmpty()) clipboard = strokes.filter { it in selection }
+    }
+
+    fun cutSelection() {
+        copySelection()
+        deleteSelection()
+    }
+
+    /**
+     * Pega el portapapeles desplazado. El desplazamiento existe para que la copia
+     * no quede exactamente encima del original, donde seria invisible.
+     */
+    fun paste() {
+        if (clipboard.isEmpty()) return
+        val offset = android.graphics.Matrix().apply { setTranslate(PASTE_OFFSET, PASTE_OFFSET) }
+        val pasted = clipboard.map { it.transformedBy(offset) }
+        val op = InkOp.AddMany(pasted)
+        strokes = op.apply(strokes)
+        selection = pasted.toSet()
+        clipboard = pasted
+        push(op)
+        scheduleSave()
+    }
+
+    fun duplicateSelection() {
+        copySelection()
+        paste()
+    }
+
     fun undo() {
         val op = undoStack.removeLastOrNull() ?: return
+        selection = emptySet()
         redoStack.addLast(op)
         strokes = op.revert(strokes)
         refreshUndoFlags()
@@ -184,6 +266,7 @@ class EditorState(
 
     fun redo() {
         val op = redoStack.removeLastOrNull() ?: return
+        selection = emptySet()
         undoStack.addLast(op)
         strokes = op.apply(strokes)
         refreshUndoFlags()
@@ -259,6 +342,17 @@ class EditorState(
 
     // --- Exportar ------------------------------------------------------------
 
+    /** Captura la seleccion como PNG para compartirla. */
+    suspend fun exportSelectionImage(): File? {
+        if (selection.isEmpty()) return null
+        busy = true
+        return try {
+            ImageExporter.exportSelection(context, strokes.filter { it in selection })
+        } finally {
+            busy = false
+        }
+    }
+
     suspend fun exportPdf(): File? {
         val idx = index ?: return null
         busy = true
@@ -295,6 +389,7 @@ class EditorState(
     private companion object {
         const val SAVE_DELAY_MS = 800L
         const val MAX_HISTORY = 60
+        const val PASTE_OFFSET = 18f
     }
 }
 
@@ -304,9 +399,36 @@ private sealed interface InkOp {
     fun apply(list: List<InkStroke>): List<InkStroke>
     fun revert(list: List<InkStroke>): List<InkStroke>
 
-    data class Add(val stroke: InkStroke) : InkOp {
-        override fun apply(list: List<InkStroke>) = list + stroke
-        override fun revert(list: List<InkStroke>) = list - stroke
+    data class AddMany(val added: List<InkStroke>) : InkOp {
+        override fun apply(list: List<InkStroke>) = list + added
+        override fun revert(list: List<InkStroke>): List<InkStroke> {
+            val gone = added.toHashSet()
+            return list.filterNot { it in gone }
+        }
+    }
+
+    /**
+     * Sustituye trazos en su posicion. Es lo que produce mover o escalar: la
+     * geometria del motor es inmutable, asi que "mover" es reemplazar el trazo
+     * por otro con distinta matriz, y hay que conservar su lugar en la lista
+     * para no alterar que queda encima de que.
+     */
+    data class Replace(val items: List<Triple<Int, InkStroke, InkStroke>>) : InkOp {
+        override fun apply(list: List<InkStroke>): List<InkStroke> {
+            val result = list.toMutableList()
+            for ((index, _, after) in items) {
+                if (index in result.indices) result[index] = after
+            }
+            return result
+        }
+
+        override fun revert(list: List<InkStroke>): List<InkStroke> {
+            val result = list.toMutableList()
+            for ((index, before, _) in items) {
+                if (index in result.indices) result[index] = before
+            }
+            return result
+        }
     }
 
     /**

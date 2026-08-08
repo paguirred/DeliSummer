@@ -5,10 +5,12 @@ enum class EditorTool {
     FINELINER,
     MARKER,
     HIGHLIGHTER,
+    DASHED,
     ERASER,
+    LASSO,
     PAN;
 
-    val isDrawing: Boolean get() = this != ERASER && this != PAN
+    val isDrawing: Boolean get() = brushKind != null
 
     val brushKind: BrushKind?
         get() = when (this) {
@@ -16,6 +18,7 @@ enum class EditorTool {
             FINELINER -> BrushKind.FINELINER
             MARKER -> BrushKind.MARKER
             HIGHLIGHTER -> BrushKind.HIGHLIGHTER
-            ERASER, PAN -> null
+            DASHED -> BrushKind.DASHED
+            ERASER, LASSO, PAN -> null
         }
 }

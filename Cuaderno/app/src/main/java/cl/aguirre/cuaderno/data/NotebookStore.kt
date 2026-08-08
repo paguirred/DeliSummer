@@ -1,6 +1,8 @@
 package cl.aguirre.cuaderno.data
 
 import android.content.Context
+import cl.aguirre.cuaderno.data.model.Folder
+import cl.aguirre.cuaderno.data.model.FolderIndex
 import cl.aguirre.cuaderno.data.model.NotebookIndex
 import cl.aguirre.cuaderno.data.model.NotebookMeta
 import cl.aguirre.cuaderno.data.model.PageMeta
@@ -39,6 +41,47 @@ class NotebookStore(context: Context) {
     private val _notebooks = MutableStateFlow<List<NotebookMeta>>(emptyList())
     val notebooks: StateFlow<List<NotebookMeta>> = _notebooks.asStateFlow()
 
+    private val _folders = MutableStateFlow<List<Folder>>(emptyList())
+    val folders: StateFlow<List<Folder>> = _folders.asStateFlow()
+
+    private val foldersFile = File(root, "folders.json")
+
+    // --- Carpetas ------------------------------------------------------------
+
+    suspend fun createFolder(name: String): Folder = withContext(Dispatchers.IO) {
+        val folder = Folder(UUID.randomUUID().toString(), name, System.currentTimeMillis())
+        writeFolders(readFolders() + folder)
+        refresh()
+        folder
+    }
+
+    suspend fun renameFolder(folderId: String, name: String) = withContext(Dispatchers.IO) {
+        writeFolders(readFolders().map { if (it.id == folderId) it.copy(name = name) else it })
+        refresh()
+    }
+
+    /**
+     * Borra la carpeta y devuelve sus cuadernos a la raiz.
+     *
+     * Nunca borra cuadernos: perder un semestre de apuntes por tocar el boton
+     * equivocado en una lista seria un desastre desproporcionado.
+     */
+    suspend fun deleteFolder(folderId: String) = withContext(Dispatchers.IO) {
+        writeFolders(readFolders().filterNot { it.id == folderId })
+        for (meta in _notebooks.value.filter { it.folderId == folderId }) {
+            readIndex(meta.id)?.let { index ->
+                writeIndex(index.copy(meta = index.meta.copy(folderId = null)))
+            }
+        }
+        refresh()
+    }
+
+    suspend fun moveToFolder(notebookId: String, folderId: String?) = withContext(Dispatchers.IO) {
+        val index = readIndex(notebookId) ?: return@withContext
+        writeIndex(index.copy(meta = index.meta.copy(folderId = folderId)))
+        refresh()
+    }
+
     // --- Cuadernos -----------------------------------------------------------
 
     suspend fun refresh() = withContext(Dispatchers.IO) {
@@ -47,15 +90,35 @@ class NotebookStore(context: Context) {
             ?.sortedByDescending { it.updatedAt }
             ?: emptyList()
         _notebooks.value = found
+        _folders.value = readFolders().sortedBy { it.name.lowercase() }
+    }
+
+    private fun readFolders(): List<Folder> {
+        if (!foldersFile.exists()) return emptyList()
+        return runCatching {
+            json.decodeFromString<FolderIndex>(foldersFile.readText()).folders
+        }.getOrDefault(emptyList())
+    }
+
+    private fun writeFolders(folders: List<Folder>) {
+        root.mkdirs()
+        foldersFile.writeText(json.encodeToString(FolderIndex(folders)))
     }
 
     suspend fun create(
         title: String,
         template: PageTemplate = PageTemplate.GRID,
+        folderId: String? = null,
     ): NotebookMeta = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
-        val meta = NotebookMeta(id = id, title = title, createdAt = now, updatedAt = now)
+        val meta = NotebookMeta(
+            id = id,
+            title = title,
+            createdAt = now,
+            updatedAt = now,
+            folderId = folderId,
+        )
         val index = NotebookIndex(
             meta = meta,
             pages = listOf(PageMeta(id = UUID.randomUUID().toString(), template = template)),
@@ -140,6 +203,7 @@ class NotebookStore(context: Context) {
         title: String,
         pdfBytes: ByteArray,
         pageSizes: List<Pair<Float, Float>>,
+        folderId: String? = null,
     ): NotebookMeta = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
@@ -165,6 +229,7 @@ class NotebookStore(context: Context) {
             createdAt = now,
             updatedAt = now,
             pdfFileName = fileName,
+            folderId = folderId,
         )
         writeIndex(NotebookIndex(meta = meta, pages = pages))
         refresh()
