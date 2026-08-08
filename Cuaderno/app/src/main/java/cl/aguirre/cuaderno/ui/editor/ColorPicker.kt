@@ -68,15 +68,22 @@ fun ColorPicker(
                 .height(160.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .pointerInput(Unit) {
-                    fun update(position: Offset) {
+                    detectTapGestures { position ->
                         saturation = (position.x / size.width).coerceIn(0f, 1f)
                         value = 1f - (position.y / size.height).coerceIn(0f, 1f)
                         emit()
                     }
-                    detectTapGestures(onTap = ::update, onPress = ::update)
                 }
                 .pointerInput(Unit) {
-                    detectDragGestures { change, _ ->
+                    detectDragGestures(
+                        // El arrastre tiene que tomar el color desde el primer
+                        // contacto, no recien al superar el umbral de arrastre.
+                        onDragStart = { position ->
+                            saturation = (position.x / size.width).coerceIn(0f, 1f)
+                            value = 1f - (position.y / size.height).coerceIn(0f, 1f)
+                            emit()
+                        },
+                    ) { change, _ ->
                         saturation = (change.position.x / size.width).coerceIn(0f, 1f)
                         value = 1f - (change.position.y / size.height).coerceIn(0f, 1f)
                         change.consume()
@@ -158,11 +165,16 @@ private fun GradientSlider(
             .height(28.dp)
             .clip(RoundedCornerShape(14.dp))
             .pointerInput(colors) {
-                fun update(position: Offset) = onFractionChange((position.x / size.width).coerceIn(0f, 1f))
-                detectTapGestures(onTap = ::update, onPress = ::update)
+                detectTapGestures { position ->
+                    onFractionChange((position.x / size.width).coerceIn(0f, 1f))
+                }
             }
             .pointerInput(colors) {
-                detectDragGestures { change, _ ->
+                detectDragGestures(
+                    onDragStart = { position ->
+                        onFractionChange((position.x / size.width).coerceIn(0f, 1f))
+                    },
+                ) { change, _ ->
                     onFractionChange((change.position.x / size.width).coerceIn(0f, 1f))
                     change.consume()
                 }

@@ -26,8 +26,18 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # Los errores del compilador quedan sepultados bajo cientos de lineas de
+      # stack trace de Gradle. Se repiten al final para poder leerlos de una.
       - name: Build APKs
-        run: ./gradlew assembleDebug assembleRelease --stacktrace
+        run: |
+          set -o pipefail
+          if ! ./gradlew assembleDebug assembleRelease 2>&1 | tee build.log; then
+            echo ""
+            echo "===================== ERRORES DE COMPILACION ====================="
+            grep -E "^e: |^\s+Argument type mismatch|^\s+Unresolved|None of the following" build.log | head -80 || true
+            echo "=================================================================="
+            exit 1
+          fi
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
