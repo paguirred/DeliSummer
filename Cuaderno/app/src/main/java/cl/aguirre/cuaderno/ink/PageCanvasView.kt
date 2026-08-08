@@ -21,7 +21,6 @@ import androidx.ink.strokes.Stroke
 import androidx.input.motionprediction.MotionEventPredictor
 import cl.aguirre.cuaderno.data.model.PageTemplate
 import kotlin.math.max
-import kotlin.math.min
 
 /**
  * El lienzo de una pagina.
@@ -322,10 +321,13 @@ class PageCanvasView @JvmOverloads constructor(
                 }
                 recordHitPoint(event, moveIndex)
 
+                // La prediccion adelanta unos milisegundos la punta del trazo, que
+                // es lo que cierra la brecha visual que queda entre la punta del
+                // lapiz y la tinta. El evento predicho lo administra el predictor,
+                // no se recicla aqui.
                 predictor.record(event)
                 val predicted = predictor.predict()
                 inProgressView.addToStroke(event, activeStylusPointerId, strokeId, predicted)
-                predicted?.recycle()
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
@@ -457,8 +459,4 @@ class PageCanvasView @JvmOverloads constructor(
 
     /** Zoom actual como multiplo del encuadre inicial, para mostrarlo en la UI. */
     val zoomFactor: Float get() = if (fitZoom > 0f) zoom / fitZoom else 1f
-
-    companion object {
-        fun clampZoom(value: Float) = min(max(value, 1f), 8f)
-    }
 }

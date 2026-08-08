@@ -12,14 +12,19 @@ import cl.aguirre.cuaderno.data.model.NotebookIndex
 import cl.aguirre.cuaderno.data.model.PageMeta
 import cl.aguirre.cuaderno.data.model.PageTemplate
 import cl.aguirre.cuaderno.ink.BrushCatalog
+import cl.aguirre.cuaderno.ink.BrushKind
 import cl.aguirre.cuaderno.ink.EditorTool
 import cl.aguirre.cuaderno.ink.InkStroke
 import cl.aguirre.cuaderno.pdf.PdfExporter
 import cl.aguirre.cuaderno.pdf.PdfPageSource
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.File
 
 /**
@@ -66,6 +71,15 @@ class EditorState(
     private var saveJob: Job? = null
     private var pdfSource: PdfPageSource? = null
 
+    /**
+     * El guardado corre en su propio scope, no en el de Compose.
+     *
+     * El scope de Compose muere apenas la pantalla sale de composicion, asi que
+     * un autoguardado pendiente moriria con el: cerrar el cuaderno antes de que
+     * venciera el retardo perderia los ultimos trazos escritos.
+     */
+    private val persistenceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     val currentPage: PageMeta? get() = index?.pages?.getOrNull(pageIndex)
     val pageCount: Int get() = index?.pages?.size ?: 0
 
@@ -73,7 +87,7 @@ class EditorState(
         get() = toolColors[tool] ?: defaultColor(tool)
 
     val sizePt: Float
-        get() = toolSizes[tool] ?: BrushCatalog.defaultSize(tool.brushKind ?: cl.aguirre.cuaderno.ink.BrushKind.PEN)
+        get() = toolSizes[tool] ?: BrushCatalog.defaultSize(tool.brushKind ?: BrushKind.PEN)
 
     fun setColor(value: Long) { toolColors[tool] = value }
     fun setSize(value: Float) { toolSizes[tool] = value }
@@ -210,7 +224,7 @@ class EditorState(
 
     private fun scheduleSave() {
         saveJob?.cancel()
-        saveJob = scope.launch {
+        saveJob = persistenceScope.launch {
             delay(SAVE_DELAY_MS)
             persist()
         }
@@ -240,7 +254,22 @@ class EditorState(
         }
     }
 
+    /**
+     * Cierra el editor. Guarda de forma sincrona lo que quede pendiente antes de
+     * soltar los recursos: es el ultimo punto en que la pagina abierta todavia
+     * existe en memoria.
+     */
     fun dispose() {
+        // El guardado final se lanza y el scope se cierra recien cuando termina.
+        // Bloquear aqui seria bloquear el hilo principal justo al cerrar la
+        // pantalla, que es cuando mas se nota un tiron.
+        val snapshot = strokes
+        val page = currentPage
+        persistenceScope.launch {
+            saveJob?.cancel()
+            if (page != null) store.savePage(notebookId, page.id, snapshot)
+        }.invokeOnCompletion { persistenceScope.cancel() }
+
         pdfSource?.close()
         pdfSource = null
         pdfBackground?.recycle()
