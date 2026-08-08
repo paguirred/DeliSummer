@@ -74,6 +74,12 @@ class EditorState(
     /** Tachar con el lapiz borra lo que hay debajo. */
     var scribbleToErase by mutableStateOf(true)
 
+    /**
+     * Modo diagnostico de latencia. Apagado por defecto: obliga a repintar de
+     * continuo para que los numeros se muevan, o sea que medir cuesta rendimiento.
+     */
+    var showDiagnostics by mutableStateOf(false)
+
     /** Cada herramienta recuerda su propio color y grosor. */
     private val toolColors = mutableStateMapOf<EditorTool, Long>()
     private val toolSizes = mutableStateMapOf<EditorTool, Int>()

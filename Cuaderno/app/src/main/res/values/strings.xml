@@ -47,6 +47,8 @@
     <string name="pressure_sensitivity_hint">Más a la derecha, el trazo engorda apretando menos.</string>
     <string name="stabilization">Estabilización del trazo</string>
     <string name="stabilization_hint">Suaviza el pulso. Subirla mucho agrega retardo: la tinta empieza a ir detrás de la punta.</string>
+    <string name="diagnostics">Diagnóstico de latencia</string>
+    <string name="diagnostics_desc">Muestra los milisegundos y un círculo rojo en la punta real del lápiz. La distancia entre el círculo y la tinta es el retardo.</string>
     <string name="scribble_to_erase">Tachar para borrar</string>
     <string name="scribble_to_erase_desc">Hacer un borrón sobre algo con el lápiz lo elimina.</string>
 

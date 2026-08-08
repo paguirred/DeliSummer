@@ -16,10 +16,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Redo
@@ -65,6 +65,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +76,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -223,59 +225,59 @@ fun EditorScreen(
             if (state.busy) {
                 LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
             }
-            Row(Modifier.fillMaxSize()) {
-                ToolRail(
-                    state = state,
-                    onOpenColor = { showColorPicker = true },
-                    onOpenSettings = { showSettings = true },
-                )
-                Column(Modifier.fillMaxSize()) {
-                    Box(Modifier.weight(1f)) {
-                        AndroidView(
-                            modifier = Modifier.fillMaxSize(),
-                            factory = { ctx ->
-                                PageCanvasView(ctx).also { view ->
-                                    view.onStrokeFinished = { state.addStroke(it) }
-                                    view.onErase = { state.erase(it) }
-                                    view.onTransformChanged = { state.zoomFactor = it }
-                                    view.onLassoComplete = { state.selectFromLasso(it) }
-                                    view.onSelectionTransform = { matrix ->
-                                        state.transformSelection(matrix)
-                                        view.clearLiveTransform()
-                                    }
-                                    canvasView = view
-                                }
-                            },
-                            update = { view ->
-                                state.currentPage?.let { page ->
-                                    view.pageWidthPt = page.widthPt
-                                    view.pageHeightPt = page.heightPt
-                                    view.template = page.template
-                                }
-                                view.pdfBackground = state.pdfBackground
-                                view.strokes = state.strokes
-                                view.selection = state.selection
-                                view.tool = state.tool
-                                view.colorLong = state.colorLong
-                                view.strokeSizePt = state.sizePt
-                                view.stylusOnly = state.stylusOnly
-                                view.stabilization = state.stabilization
-                                view.pressureGamma = state.pressureGamma
-                                view.scribbleToErase = state.scribbleToErase
-                            },
-                        )
-                    }
 
-                    when {
-                        state.selection.isNotEmpty() -> SelectionBar(
-                            state = state,
-                            onScreenshot = {
-                                scope.launch { share(state.exportSelectionImage(), "image/png") }
-                            },
-                        )
-                        state.tool.isDrawing -> SizePanel(state, onOpenColor = { showColorPicker = true })
-                    }
-                }
+            // La barra va arriba y en horizontal: en una tablet apaisada el alto
+            // es el recurso escaso, y una columna lateral se lo come.
+            ToolBar(
+                state = state,
+                onOpenColor = { showColorPicker = true },
+                onOpenSettings = { showSettings = true },
+            )
+
+            Box(Modifier.weight(1f)) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctx ->
+                        PageCanvasView(ctx).also { view ->
+                            view.onStrokeFinished = { state.addStroke(it) }
+                            view.onErase = { state.erase(it) }
+                            view.onTransformChanged = { state.zoomFactor = it }
+                            view.onLassoComplete = { state.selectFromLasso(it) }
+                            view.onSelectionTransform = { matrix ->
+                                state.transformSelection(matrix)
+                                view.clearLiveTransform()
+                            }
+                            canvasView = view
+                        }
+                    },
+                    update = { view ->
+                        state.currentPage?.let { page ->
+                            view.pageWidthPt = page.widthPt
+                            view.pageHeightPt = page.heightPt
+                            view.template = page.template
+                        }
+                        view.pdfBackground = state.pdfBackground
+                        view.strokes = state.strokes
+                        view.selection = state.selection
+                        view.tool = state.tool
+                        view.colorLong = state.colorLong
+                        view.strokeSizePt = state.sizePt
+                        view.stylusOnly = state.stylusOnly
+                        view.stabilization = state.stabilization
+                        view.pressureGamma = state.pressureGamma
+                        view.scribbleToErase = state.scribbleToErase
+                        view.showDiagnostics = state.showDiagnostics
+                    },
+                )
+            }
+
+            if (state.selection.isNotEmpty()) {
+                SelectionBar(
+                    state = state,
+                    onScreenshot = {
+                        scope.launch { share(state.exportSelectionImage(), "image/png") }
+                    },
+                )
             }
         }
     }
@@ -327,6 +329,12 @@ fun EditorScreen(
                         onCheckedChange = { state.stylusOnly = it },
                         title = stringResource(R.string.stylus_only),
                         subtitle = stringResource(R.string.stylus_only_desc),
+                    )
+                    SettingSwitch(
+                        checked = state.showDiagnostics,
+                        onCheckedChange = { state.showDiagnostics = it },
+                        title = stringResource(R.string.diagnostics),
+                        subtitle = stringResource(R.string.diagnostics_desc),
                     )
                 }
             },
@@ -452,80 +460,65 @@ private fun SelectionBar(state: EditorState, onScreenshot: () -> Unit) {
     }
 }
 
+/**
+ * Barra de herramientas horizontal.
+ *
+ * Las herramientas van a la izquierda y los ajustes del trazo a la derecha, para
+ * que el pulgar no tenga que cruzar la pantalla entre elegir el lapiz y ajustar
+ * su grosor.
+ */
 @Composable
-private fun SizePanel(state: EditorState, onOpenColor: () -> Unit) {
-    Surface(tonalElevation = 3.dp) {
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-        ) {
-            Box(
-                Modifier
-                    .size(32.dp)
-                    .background(state.colorLong.toComposeColor(), CircleShape)
-                    .border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    .clickable { onOpenColor() },
-            )
-
-            Text(stringResource(R.string.size), style = MaterialTheme.typography.labelLarge)
-
-            Slider(
-                value = state.sizeValue.toFloat(),
-                onValueChange = { state.setSize(it.roundToInt()) },
-                valueRange = 1f..100f,
-                modifier = Modifier.weight(1f),
-            )
-
-            Text(
-                state.sizeValue.toString(),
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.width(32.dp),
-            )
-
-            // Muestra viva del trazo: sin esto, el control de sensibilidad a la
-            // presion se ajusta probando en la hoja y borrando.
-            StrokePreview(
-                kind = state.tool.brushKind ?: BrushKind.PEN,
-                sizeValue = state.sizeValue,
-                color = state.colorLong.toComposeColor(),
-                pressureGamma = state.pressureGamma,
-                modifier = Modifier.width(120.dp).height(44.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun ToolRail(
+private fun ToolBar(
     state: EditorState,
     onOpenColor: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
-    Surface(
-        tonalElevation = 2.dp,
-        modifier = Modifier.fillMaxHeight().width(84.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             for ((tool, icon, label) in TOOLS) {
                 ToolButton(state, tool, icon, label)
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            VerticalDivider(Modifier.height(40.dp).padding(horizontal = 8.dp))
 
             Box(
                 Modifier
-                    .size(30.dp)
+                    .size(32.dp)
                     .background(state.colorLong.toComposeColor(), CircleShape)
                     .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
                     .clickable { onOpenColor() },
             )
+
+            if (state.tool.isDrawing) {
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    state.sizeValue.toString(),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.width(28.dp),
+                )
+                Slider(
+                    value = state.sizeValue.toFloat(),
+                    onValueChange = { state.setSize(it.roundToInt()) },
+                    valueRange = 1f..100f,
+                    modifier = Modifier.width(180.dp),
+                )
+                // Muestra viva del trazo: sin ella, el control de sensibilidad a
+                // la presion se ajusta probando en la hoja y borrando.
+                StrokePreview(
+                    kind = state.tool.brushKind ?: BrushKind.PEN,
+                    sizeValue = state.sizeValue,
+                    color = state.colorLong.toComposeColor(),
+                    pressureGamma = state.pressureGamma,
+                    modifier = Modifier.width(110.dp).height(40.dp),
+                )
+            }
 
             IconButton(onClick = onOpenSettings) {
                 Icon(Icons.Default.Settings, stringResource(R.string.pen_settings))
@@ -538,7 +531,8 @@ private fun ToolRail(
  * Boton de herramienta con su nombre debajo.
  *
  * La etiqueta ocupa espacio, pero sin ella hay que adivinar que hace cada icono:
- * un pincel y un lapiz se parecen bastante en 24dp.
+ * un pincel y un lapiz se parecen bastante en 24dp, y el resaltador se venia
+ * dibujando con el icono de una ampolleta.
  */
 @Composable
 private fun ToolButton(
@@ -552,33 +546,35 @@ private fun ToolButton(
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
             .clickable { state.tool = tool }
             .background(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                RoundedCornerShape(10.dp),
             )
-            .padding(vertical = 4.dp, horizontal = 2.dp)
-            .width(76.dp),
+            .padding(vertical = 2.dp, horizontal = 2.dp)
+            .width(64.dp),
     ) {
-        FilledIconButton(
-            onClick = { state.tool = tool },
-            colors = if (selected) {
-                IconButtonDefaults.filledIconButtonColors()
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = if (selected) {
+                MaterialTheme.colorScheme.onSecondaryContainer
             } else {
-                IconButtonDefaults.filledIconButtonColors(
-                    containerColor = Color.Transparent,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                MaterialTheme.colorScheme.onSurfaceVariant
             },
-        ) {
-            Icon(icon, contentDescription = label)
-        }
+            modifier = Modifier.padding(top = 4.dp).size(24.dp),
+        )
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
             fontSize = 9.sp,
             textAlign = TextAlign.Center,
             maxLines = 1,
+            color = if (selected) {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
         )
     }
 }

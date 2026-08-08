@@ -48,6 +48,20 @@ class PageCanvasView @JvmOverloads constructor(
     private val predictor: MotionEventPredictor by lazy { MotionEventPredictor.newInstance(this) }
     private val conditioner = InputConditioner()
     private val scribbleDetector = ScribbleDetector()
+    private val perf = PerfMonitor()
+
+    /**
+     * Modo diagnostico: numeros de latencia y un circulo en la posicion cruda
+     * del lapiz. La distancia entre ese circulo y la punta de la tinta es la
+     * latencia, hecha visible.
+     */
+    var showDiagnostics: Boolean = false
+        set(value) { if (field != value) { field = value; invalidate() } }
+
+    var onDiagnostics: ((String) -> Unit)? = null
+
+    private var rawX = Float.NaN
+    private var rawY = Float.NaN
 
     // --- Estado de la pagina -------------------------------------------------
 
@@ -166,6 +180,17 @@ class PageCanvasView @JvmOverloads constructor(
         isAntiAlias = true
         style = Paint.Style.FILL
         color = Color.parseColor("#1B57B8")
+    }
+    private val diagMarkerPaint = Paint().apply {
+        isAntiAlias = true
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = Color.parseColor("#E53935")
+    }
+    private val diagTextPaint = Paint().apply {
+        isAntiAlias = true
+        color = Color.parseColor("#E53935")
+        textSize = 30f
     }
 
     private val combined = Matrix()
@@ -319,6 +344,7 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (showDiagnostics) perf.beginDraw(strokes.size)
 
         pageRect.set(0f, 0f, pageWidthPt, pageHeightPt)
         pageToView.mapRect(pageRect)
@@ -376,6 +402,17 @@ class PageCanvasView @JvmOverloads constructor(
                 canvas.drawPath(lassoPath, lassoPaint)
             }
         }
+
+        if (showDiagnostics) {
+            if (!rawX.isNaN()) canvas.drawCircle(rawX, rawY, 14f, diagMarkerPaint)
+            val text = perf.summary()
+            canvas.drawText(text, 16f, height - 20f, diagTextPaint)
+            perf.endDraw()
+            onDiagnostics?.invoke(text)
+            // Con el diagnostico activo hace falta repintar de continuo para que
+            // los numeros se muevan; por eso no queda encendido por defecto.
+            invalidate()
+        }
     }
 
     private fun drawSelectionFrame(canvas: Canvas) {
@@ -432,6 +469,11 @@ class PageCanvasView @JvmOverloads constructor(
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (showDiagnostics) {
+            perf.onInput(event)
+            rawX = event.getX(0)
+            rawY = event.getY(0)
+        }
         val index = event.actionIndex
         val toolType = event.getToolType(index)
         val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS
