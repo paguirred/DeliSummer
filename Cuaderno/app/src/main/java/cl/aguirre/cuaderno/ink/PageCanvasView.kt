@@ -252,7 +252,11 @@ class PageCanvasView @JvmOverloads constructor(
         canvas.save()
         canvas.clipRect(pageRect)
         for (inkStroke in strokes) {
-            renderer.draw(inkStroke.stroke, canvas, pageToView)
+            renderer.draw(
+                canvas = canvas,
+                stroke = inkStroke.stroke,
+                strokeToScreenTransform = pageToView,
+            )
         }
         canvas.restore()
     }

@@ -71,8 +71,15 @@ object PdfExporter {
                     PageBackground.draw(canvas, page.template, page.widthPt, page.heightPt)
                 }
 
+                // El canvas del PDF ya esta en puntos de pagina, que es el mismo
+                // sistema en que viven los trazos: por eso la transformacion es
+                // la identidad y la tinta sale vectorial, sin reescalar.
                 for (inkStroke in store.loadPage(index.meta.id, page.id)) {
-                    renderer.draw(inkStroke.stroke, canvas, identity)
+                    renderer.draw(
+                        canvas = canvas,
+                        stroke = inkStroke.stroke,
+                        strokeToScreenTransform = identity,
+                    )
                 }
 
                 document.finishPage(pdfPage)

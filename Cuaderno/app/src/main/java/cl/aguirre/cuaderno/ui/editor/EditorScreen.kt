@@ -61,7 +61,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -75,6 +74,7 @@ import cl.aguirre.cuaderno.ink.BrushCatalog
 import cl.aguirre.cuaderno.ink.BrushKind
 import cl.aguirre.cuaderno.ink.PageCanvasView
 import cl.aguirre.cuaderno.ui.theme.InkPalette
+import cl.aguirre.cuaderno.ui.theme.toPackedLong
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -291,7 +291,7 @@ private fun ToolRail(state: EditorState) {
                     InkPalette.colors
                 }
                 for (color in palette) {
-                    val packed = Color.pack(color.toArgb())
+                    val packed = color.toPackedLong()
                     Box(
                         Modifier
                             .size(28.dp)

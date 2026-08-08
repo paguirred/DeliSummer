@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 
 private val Ink = Color(0xFF1B3A5C)
 private val InkLight = Color(0xFF7FB2E5)
@@ -41,6 +42,15 @@ fun CuadernoTheme(
         content = content,
     )
 }
+
+/**
+ * Convierte un color de Compose al Long empaquetado que espera el pincel.
+ *
+ * Existe para no tener que traer `android.graphics.Color` a los archivos de UI,
+ * donde ya vive el `Color` de Compose: dos tipos con el mismo nombre simple en
+ * el mismo archivo es una fuente segura de confusion.
+ */
+fun Color.toPackedLong(): Long = android.graphics.Color.pack(toArgb())
 
 /** Paleta de tinta. Los valores son ARGB y se empaquetan a Long para el pincel. */
 object InkPalette {
