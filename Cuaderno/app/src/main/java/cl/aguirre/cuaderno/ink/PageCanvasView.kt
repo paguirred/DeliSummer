@@ -90,7 +90,9 @@ class PageCanvasView @JvmOverloads constructor(
 
     var tool: EditorTool = EditorTool.PEN
     var colorLong: Long = Color.pack(Color.BLACK)
-    var strokeSizePt: Float = BrushCatalog.defaultSize(BrushKind.PEN)
+    // defaultSize devuelve el valor 1..100 de la UI; aqui se necesitan puntos.
+    var strokeSizePt: Float =
+        BrushCatalog.sizeToPoints(BrushCatalog.defaultSize(BrushKind.PEN))
 
     /** Radio del borrador en puntos de pagina. */
     var eraserRadiusPt: Float = 10f
