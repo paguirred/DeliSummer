@@ -1,0 +1,39 @@
+name: Cuaderno (Android)
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "Cuaderno/**"
+      - ".github/workflows/cuaderno-android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Cuaderno
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          build-root-directory: Cuaderno
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuaderno-debug
+          path: Cuaderno/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

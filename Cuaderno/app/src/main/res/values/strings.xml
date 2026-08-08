@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Cuaderno</string>
+
+    <string name="library_title">Mis cuadernos</string>
+    <string name="library_empty_title">Todavía no hay cuadernos</string>
+    <string name="library_empty_body">Crea uno en blanco o importa un PDF para anotarlo.</string>
+    <string name="new_notebook">Cuaderno nuevo</string>
+    <string name="import_pdf">Importar PDF</string>
+    <string name="untitled_notebook">Sin título</string>
+    <string name="rename">Renombrar</string>
+    <string name="delete">Eliminar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="save">Guardar</string>
+    <string name="confirm_delete_title">¿Eliminar cuaderno?</string>
+    <string name="confirm_delete_body">Se borran todas sus páginas. No se puede deshacer.</string>
+
+    <string name="tool_pen">Lápiz</string>
+    <string name="tool_pencil">Grafito</string>
+    <string name="tool_marker">Marcador</string>
+    <string name="tool_highlighter">Resaltador</string>
+    <string name="tool_eraser">Borrador</string>
+    <string name="tool_pan">Mover</string>
+
+    <string name="undo">Deshacer</string>
+    <string name="redo">Rehacer</string>
+    <string name="add_page">Página nueva</string>
+    <string name="delete_page">Eliminar página</string>
+    <string name="export_pdf">Exportar PDF</string>
+    <string name="share">Compartir</string>
+    <string name="page_of">Página %1$d de %2$d</string>
+    <string name="template">Plantilla</string>
+    <string name="template_blank">En blanco</string>
+    <string name="template_ruled">Líneas</string>
+    <string name="template_grid">Cuadriculado</string>
+    <string name="template_dots">Puntos</string>
+    <string name="stylus_only">Solo lápiz</string>
+    <string name="stylus_only_desc">Ignora el dedo al dibujar (evita marcas con la palma)</string>
+    <string name="zoom_reset">Restablecer zoom</string>
+    <string name="color">Color</string>
+    <string name="size">Grosor</string>
+    <string name="exporting">Exportando…</string>
+    <string name="export_failed">No se pudo exportar</string>
+    <string name="import_failed">No se pudo importar el PDF</string>
+</resources>
