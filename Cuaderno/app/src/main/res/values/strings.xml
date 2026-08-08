@@ -15,8 +15,9 @@
     <string name="confirm_delete_title">¿Eliminar cuaderno?</string>
     <string name="confirm_delete_body">Se borran todas sus páginas. No se puede deshacer.</string>
 
-    <string name="tool_pen">Lápiz</string>
-    <string name="tool_fineliner">Fineliner</string>
+    <string name="tool_pen">Estilográfica</string>
+    <string name="tool_brush">Pincel</string>
+    <string name="tool_fineliner">Bolígrafo</string>
     <string name="tool_marker">Marcador</string>
     <string name="tool_highlighter">Resaltador</string>
     <string name="tool_eraser">Borrador</string>

@@ -61,10 +61,15 @@ class EditorState(
     var stabilization by mutableStateOf(0.15f)
 
     /**
-     * Gamma de la curva de presion. Menor a 1 engorda el trazo antes (mas
-     * sensible), mayor a 1 exige apretar mas.
+     * Gamma de la curva de presion, propia de cada herramienta.
+     *
+     * Es por herramienta y no global porque es justo lo que separa una
+     * estilografica de una pluma pincel: el motor les da el mismo pincel, y la
+     * diferencia de caracter sale de como se traduce la fuerza en grosor.
      */
-    var pressureGamma by mutableStateOf(1f)
+    var pressureGamma: Float
+        get() = toolGammas[tool] ?: (tool.brushKind?.defaultPressureGamma ?: 1f)
+        set(value) { toolGammas[tool] = value.coerceIn(0.2f, 4f) }
 
     /** Tachar con el lapiz borra lo que hay debajo. */
     var scribbleToErase by mutableStateOf(true)
@@ -72,6 +77,7 @@ class EditorState(
     /** Cada herramienta recuerda su propio color y grosor. */
     private val toolColors = mutableStateMapOf<EditorTool, Long>()
     private val toolSizes = mutableStateMapOf<EditorTool, Int>()
+    private val toolGammas = mutableStateMapOf<EditorTool, Float>()
 
     var pdfBackground by mutableStateOf<Bitmap?>(null)
         private set

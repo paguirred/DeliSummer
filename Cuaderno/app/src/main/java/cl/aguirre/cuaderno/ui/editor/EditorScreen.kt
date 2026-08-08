@@ -38,6 +38,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FitScreen
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.LinearScale
@@ -86,7 +87,7 @@ import androidx.core.content.FileProvider
 import cl.aguirre.cuaderno.R
 import cl.aguirre.cuaderno.data.NotebookStore
 import cl.aguirre.cuaderno.data.model.PageTemplate
-import cl.aguirre.cuaderno.ink.BrushCatalog
+import cl.aguirre.cuaderno.ink.BrushKind
 import cl.aguirre.cuaderno.ink.EditorTool
 import cl.aguirre.cuaderno.ink.PageCanvasView
 import cl.aguirre.cuaderno.ui.theme.toComposeColor
@@ -343,6 +344,7 @@ private val TEMPLATES = listOf(
 
 private val TOOLS: List<Triple<EditorTool, ImageVector, Int>> = listOf(
     Triple(EditorTool.PEN, Icons.Default.Draw, R.string.tool_pen),
+    Triple(EditorTool.BRUSH, Icons.Default.Gesture, R.string.tool_brush),
     Triple(EditorTool.FINELINER, Icons.Default.Edit, R.string.tool_fineliner),
     Triple(EditorTool.MARKER, Icons.Default.Brush, R.string.tool_marker),
     // BorderColor es un marcador con una franja de color debajo. Se usaba
@@ -481,15 +483,15 @@ private fun SizePanel(state: EditorState, onOpenColor: () -> Unit) {
                 modifier = Modifier.width(32.dp),
             )
 
-            // Muestra del trazo al tamaño y color elegidos.
-            Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-                val diameter = (BrushCatalog.sizeToPoints(state.sizeValue) * 0.9f).coerceIn(2f, 40f)
-                Box(
-                    Modifier
-                        .size(diameter.dp)
-                        .background(state.colorLong.toComposeColor(), CircleShape),
-                )
-            }
+            // Muestra viva del trazo: sin esto, el control de sensibilidad a la
+            // presion se ajusta probando en la hoja y borrando.
+            StrokePreview(
+                kind = state.tool.brushKind ?: BrushKind.PEN,
+                sizeValue = state.sizeValue,
+                color = state.colorLong.toComposeColor(),
+                pressureGamma = state.pressureGamma,
+                modifier = Modifier.width(120.dp).height(44.dp),
+            )
         }
     }
 }

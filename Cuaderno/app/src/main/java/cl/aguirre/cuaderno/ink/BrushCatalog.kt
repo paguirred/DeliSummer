@@ -18,8 +18,18 @@ import kotlin.math.pow
  * [PEN] varia de grosor con la fuerza, [FINELINER] no varia nunca.
  */
 enum class BrushKind(val id: String) {
-    /** Sensible a la presion: engorda al apretar. */
+    /** Sensible a la presion: engorda al apretar, como una estilografica. */
     PEN("pen"),
+
+    /**
+     * Pluma pincel: misma familia que [PEN], pero con una curva de presion mucho
+     * mas agresiva y un rango de grosor mayor.
+     *
+     * El motor solo trae cuatro familias, asi que dos herramientas no pueden
+     * diferenciarse por el pincel en si. Lo que si cambia el caracter del trazo
+     * es como se traduce la fuerza en grosor, y eso lo controla la app.
+     */
+    BRUSH("brush"),
 
     /**
      * Grosor constante, como un fineliner. El id sigue siendo "pencil" porque asi
@@ -38,7 +48,7 @@ enum class BrushKind(val id: String) {
 
     val family: BrushFamily
         get() = when (this) {
-            PEN -> StockBrushes.pressurePen()
+            PEN, BRUSH -> StockBrushes.pressurePen()
             FINELINER -> StockBrushes.marker()
             MARKER -> StockBrushes.marker()
             HIGHLIGHTER -> StockBrushes.highlighter()
@@ -46,7 +56,21 @@ enum class BrushKind(val id: String) {
         }
 
     /** True si el grosor del trazo responde a la fuerza del lapiz. */
-    val respondsToPressure: Boolean get() = this == PEN
+    val respondsToPressure: Boolean get() = this == PEN || this == BRUSH
+
+    /**
+     * Curva de presion propia de cada herramienta. Menor a 1 engorda antes.
+     *
+     * Es lo que hace que la pluma pincel se sienta como un pincel y la
+     * estilografica como una estilografica, teniendo ambas el mismo pincel
+     * subyacente.
+     */
+    val defaultPressureGamma: Float
+        get() = when (this) {
+            PEN -> 1f
+            BRUSH -> 0.55f
+            else -> 1f
+        }
 
     companion object {
         fun fromId(id: String): BrushKind = entries.firstOrNull { it.id == id } ?: PEN
@@ -102,6 +126,7 @@ object BrushCatalog {
     /** Valor 1..100 por defecto de cada herramienta. */
     fun defaultSize(kind: BrushKind): Int = when (kind) {
         BrushKind.PEN -> 34
+        BrushKind.BRUSH -> 48
         BrushKind.FINELINER -> 26
         BrushKind.MARKER -> 52
         BrushKind.HIGHLIGHTER -> 78
