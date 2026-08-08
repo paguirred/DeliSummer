@@ -71,6 +71,11 @@ class EditorState(
         get() = toolGammas[tool] ?: (tool.brushKind?.defaultPressureGamma ?: 1f)
         set(value) { toolGammas[tool] = value.coerceIn(0.2f, 4f) }
 
+    /** Cuanto adelgaza el trazo al entrar y al salir, por herramienta. */
+    var taper: Float
+        get() = toolTapers[tool] ?: 0.7f
+        set(value) { toolTapers[tool] = value.coerceIn(0f, 1f) }
+
     /** Tachar con el lapiz borra lo que hay debajo. */
     var scribbleToErase by mutableStateOf(true)
 
@@ -84,6 +89,7 @@ class EditorState(
     private val toolColors = mutableStateMapOf<EditorTool, Long>()
     private val toolSizes = mutableStateMapOf<EditorTool, Int>()
     private val toolGammas = mutableStateMapOf<EditorTool, Float>()
+    private val toolTapers = mutableStateMapOf<EditorTool, Float>()
 
     var pdfBackground by mutableStateOf<Bitmap?>(null)
         private set

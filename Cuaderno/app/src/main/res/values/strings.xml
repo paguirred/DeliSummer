@@ -46,6 +46,8 @@
     <string name="app_settings">Ajustes</string>
     <string name="pressure_sensitivity">Sensibilidad de presión</string>
     <string name="pressure_sensitivity_hint">Más a la derecha, el trazo engorda apretando menos.</string>
+    <string name="taper">Afinado de extremos</string>
+    <string name="taper_hint">Adelgaza el trazo al entrar y al salir, como una pluma.</string>
     <string name="stabilization">Estabilización del trazo</string>
     <string name="stabilization_hint">Suaviza el pulso. Subirla mucho agrega retardo: la tinta empieza a ir detrás de la punta.</string>
     <string name="diagnostics">Diagnóstico de latencia</string>

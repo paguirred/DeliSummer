@@ -64,10 +64,15 @@ object ImageExporter {
 
         val renderer = CanvasStrokeRenderer.create()
         val combined = Matrix()
+        // La matriz va al canvas ademas de pasarse al renderizador: el
+        // renderizador no transforma geometria, solo elige nivel de detalle.
         for (s in strokes) {
             combined.set(toImage)
             combined.preConcat(s.transform)
+            canvas.save()
+            canvas.concat(combined)
             renderer.draw(canvas = canvas, stroke = s.stroke, strokeToScreenTransform = combined)
+            canvas.restore()
         }
 
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }

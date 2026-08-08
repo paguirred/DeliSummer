@@ -54,16 +54,32 @@ class PerfMonitor {
         }
     }
 
-    fun beginDraw(strokes: Int) {
+    /** Pico de latencia del ultimo trazo. Es lo que de verdad se siente. */
+    var worstMs = 0f
+        private set
+
+    fun beginStroke() {
+        worstMs = 0f
+        inputToDrawMs = 0f
+    }
+
+    /**
+     * @param drawing true solo mientras el lapiz esta apoyado.
+     *
+     * La distincion importa: al levantar el lapiz dejan de llegar eventos, pero
+     * los frames siguen, y la diferencia entre "ahora" y "el ultimo evento"
+     * empieza a crecer sola. Medir en ese rato reporta el tiempo que alguien
+     * paso mirando la pantalla, no la latencia del trazo.
+     */
+    fun beginDraw(strokes: Int, drawing: Boolean) {
         strokeCount = strokes
         drawStart = SystemClock.uptimeMillis()
-        if (lastEventUptime != 0L) {
-            val delta = (drawStart - lastEventUptime).toFloat()
-            // Solo interesa el frame que sigue a un evento; si nadie escribio
-            // hace rato, la diferencia mide inactividad, no latencia.
-            if (delta in 0f..MAX_MEANINGFUL_MS) {
-                inputToDrawMs = inputToDrawMs * 0.8f + delta * 0.2f
-            }
+        if (!drawing || lastEventUptime == 0L) return
+
+        val delta = (drawStart - lastEventUptime).toFloat()
+        if (delta in 0f..MAX_MEANINGFUL_MS) {
+            inputToDrawMs = if (inputToDrawMs == 0f) delta else inputToDrawMs * 0.8f + delta * 0.2f
+            if (delta > worstMs) worstMs = delta
         }
     }
 
@@ -74,7 +90,8 @@ class PerfMonitor {
 
     fun summary(): String = buildString {
         append("entrada ").append(inputHz.toInt()).append(" Hz")
-        append("  ·  a pantalla ").append(inputToDrawMs.toInt()).append(" ms")
+        append("  ·  a pantalla ").append(inputToDrawMs.toInt())
+        append("/").append(worstMs.toInt()).append(" ms")
         append("  ·  dibujado ").append(String.format("%.1f", drawMs)).append(" ms")
         append("  ·  trazos ").append(strokeCount)
     }

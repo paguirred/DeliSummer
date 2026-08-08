@@ -32,8 +32,12 @@ import kotlin.math.min
  *
  *  - La capa mojada la maneja [InProgressStrokesView], que dibuja el trazo en
  *    curso con front buffer, sin esperar el ciclo normal de composicion.
- *  - La capa seca son los trazos ya terminados, rasterizados en un bitmap de
- *    cache que se vuelca de una sola pasada.
+ *  - La capa seca son los trazos ya terminados, que se redibujan en [onDraw].
+ *
+ * La capa seca estuvo un tiempo cacheada en un bitmap, pero eso obligaba a
+ * rasterizar la tinta en un Canvas por software mientras que [onDraw] recibe uno
+ * acelerado por GPU. Cambiar hardware por software para "optimizar" resulto ser
+ * el peor negocio posible en el camino caliente.
  *
  * Los trazos se guardan en coordenadas de pagina (puntos PDF), nunca de pantalla.
  * El zoom y el desplazamiento viven solo en las matrices.
@@ -69,7 +73,6 @@ class PageCanvasView @JvmOverloads constructor(
         set(value) {
             if (field === value) return
             field = value
-            cacheValid = false
             invalidate()
         }
 
@@ -78,7 +81,6 @@ class PageCanvasView @JvmOverloads constructor(
         set(value) {
             if (field == value) return
             field = value
-            cacheValid = false
             invalidate()
         }
 
@@ -86,7 +88,6 @@ class PageCanvasView @JvmOverloads constructor(
         set(value) {
             if (field == value) return
             field = value
-            cacheValid = false
             invalidate()
         }
 
@@ -118,6 +119,11 @@ class PageCanvasView @JvmOverloads constructor(
         get() = conditioner.pressureGamma
         set(value) { conditioner.pressureGamma = value.coerceIn(0.2f, 4f) }
 
+    /** Cuanto adelgaza el trazo al entrar y al salir. */
+    var taper: Float
+        get() = conditioner.taper
+        set(value) { conditioner.taper = value.coerceIn(0f, 1f) }
+
     var stylusOnly: Boolean = true
 
     // --- Callbacks -----------------------------------------------------------
@@ -138,14 +144,6 @@ class PageCanvasView @JvmOverloads constructor(
     private var fitZoom = 1f
     private var minZoom = 0.1f
     private var needsFit = true
-
-    // --- Cache de la capa seca -----------------------------------------------
-
-    private var dryCache: Bitmap? = null
-    private var dryCanvas: Canvas? = null
-    private var drawnCount = 0
-    private var drawnLast: InkStroke? = null
-    private var cacheValid = false
 
     // --- Dibujo --------------------------------------------------------------
 
@@ -248,22 +246,7 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        releaseCache()
-        if (w > 0 && h > 0) {
-            dryCache = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-            dryCanvas = Canvas(dryCache!!)
-        }
-        cacheValid = false
         if (needsFit || oldw == 0) fitToWidth()
-    }
-
-    private fun releaseCache() {
-        dryCanvas = null
-        dryCache?.recycle()
-        dryCache = null
-        drawnCount = 0
-        drawnLast = null
-        cacheValid = false
     }
 
     private fun requestFit() {
@@ -326,7 +309,6 @@ class PageCanvasView @JvmOverloads constructor(
         pageToView.postScale(zoom, zoom)
         pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
-        cacheValid = false
         onTransformChanged?.invoke(if (fitZoom > 0f) zoom / fitZoom else 1f)
         invalidate()
     }
@@ -344,7 +326,13 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (showDiagnostics) perf.beginDraw(strokes.size)
+        if (showDiagnostics) {
+            perf.beginDraw(strokes.size, activeStylusPointerId != MotionEvent.INVALID_POINTER_ID)
+        }
+
+        // Nada se pinta fuera de la vista. Sin esto, al alejar el zoom la hoja
+        // se veia invadiendo la barra de herramientas de arriba.
+        canvas.clipRect(0f, 0f, width.toFloat(), height.toFloat())
 
         pageRect.set(0f, 0f, pageWidthPt, pageHeightPt)
         pageToView.mapRect(pageRect)
@@ -367,20 +355,14 @@ class PageCanvasView @JvmOverloads constructor(
         }
         canvas.restore()
 
-        syncDryCache()
-        dryCache?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-
-        // Los seleccionados van fuera del cache porque se mueven en vivo.
-        if (selection.isNotEmpty()) {
-            for (inkStroke in strokes) {
-                if (inkStroke !in selection) continue
-                combined.set(pageToView)
-                combined.preConcat(liveTransform)
-                combined.preConcat(inkStroke.transform)
-                renderer.draw(canvas, inkStroke.stroke, combined)
-            }
-            drawSelectionFrame(canvas)
+        for (inkStroke in strokes) {
+            val selected = inkStroke in selection
+            combined.set(pageToView)
+            if (selected) combined.preConcat(liveTransform)
+            combined.preConcat(inkStroke.transform)
+            drawStroke(canvas, inkStroke, combined)
         }
+        if (selection.isNotEmpty()) drawSelectionFrame(canvas)
 
         lassoLive?.let { points ->
             if (points.size >= 4) {
@@ -439,30 +421,19 @@ class PageCanvasView @JvmOverloads constructor(
         return box
     }
 
-    private fun syncDryCache() {
-        val target = dryCanvas ?: return
-        val dry = if (selection.isEmpty()) strokes else strokes.filter { it !in selection }
-
-        val appendOnly = cacheValid &&
-            dry.size >= drawnCount &&
-            (drawnCount == 0 || dry.getOrNull(drawnCount - 1) === drawnLast)
-
-        if (!appendOnly) {
-            dryCache?.eraseColor(Color.TRANSPARENT)
-            drawnCount = 0
-        } else if (drawnCount == dry.size) {
-            return
-        }
-
-        for (i in drawnCount until dry.size) {
-            combined.set(pageToView)
-            combined.preConcat(dry[i].transform)
-            renderer.draw(canvas = target, stroke = dry[i].stroke, strokeToScreenTransform = combined)
-        }
-
-        drawnCount = dry.size
-        drawnLast = dry.lastOrNull()
-        cacheValid = true
+    /**
+     * Dibuja un trazo ya seco aplicando [matrix].
+     *
+     * La matriz va al canvas y ademas se pasa al renderizador. No es redundante:
+     * el renderizador no transforma la geometria, solo usa la matriz para elegir
+     * el nivel de detalle. Quien coloca el trazo en la pagina es el canvas.
+     * Olvidar el concat deja los trazos diminutos pegados al origen.
+     */
+    private fun drawStroke(canvas: Canvas, inkStroke: InkStroke, matrix: Matrix) {
+        canvas.save()
+        canvas.concat(matrix)
+        renderer.draw(canvas = canvas, stroke = inkStroke.stroke, strokeToScreenTransform = matrix)
+        canvas.restore()
     }
 
     // --- Entrada -------------------------------------------------------------
@@ -581,14 +552,12 @@ class PageCanvasView @JvmOverloads constructor(
         if (liveTransform.isIdentity) return
         onSelectionTransform?.invoke(Matrix(liveTransform))
         liveTransform.reset()
-        cacheValid = false
         invalidate()
     }
 
     /** Limpia la transformacion en vivo tras confirmarla desde el estado. */
     fun clearLiveTransform() {
         liveTransform.reset()
-        cacheValid = false
         invalidate()
     }
 
@@ -612,6 +581,7 @@ class PageCanvasView @JvmOverloads constructor(
                 conditioner.reset()
                 scribbleDetector.reset()
                 scribbleErasing = false
+                if (showDiagnostics) perf.beginStroke()
 
                 val conditioned = conditioner.condition(event, index)
                 val source = conditioned ?: event
@@ -811,7 +781,6 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         inProgressView.removeFinishedStrokesListener(this)
-        releaseCache()
         super.onDetachedFromWindow()
     }
 

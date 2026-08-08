@@ -267,6 +267,7 @@ fun EditorScreen(
                         view.stylusOnly = state.stylusOnly
                         view.stabilization = state.stabilization
                         view.pressureGamma = state.pressureGamma
+                        view.taper = state.taper
                         view.scribbleToErase = state.scribbleToErase
                         view.showDiagnostics = state.showDiagnostics
                     },
@@ -327,6 +328,13 @@ fun EditorScreen(
                         value = 1f - (state.pressureGamma - 0.4f) / 2f,
                         onValueChange = { state.pressureGamma = (1f - it) * 2f + 0.4f },
                         readout = "${((1f - (state.pressureGamma - 0.4f) / 2f) * 100).roundToInt()}%",
+                    )
+                    LabeledSlider(
+                        label = stringResource(R.string.taper),
+                        hint = stringResource(R.string.taper_hint),
+                        value = state.taper,
+                        onValueChange = { state.taper = it },
+                        readout = "${(state.taper * 100).roundToInt()}%",
                     )
                     LabeledSlider(
                         label = stringResource(R.string.stabilization),
