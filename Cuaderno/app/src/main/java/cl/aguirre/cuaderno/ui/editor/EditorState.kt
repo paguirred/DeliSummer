@@ -53,9 +53,21 @@ class EditorState(
     var busy by mutableStateOf(false)
         private set
 
+    /**
+     * Estabilizacion del trazo, 0..1. Por defecto baja: suavizar siempre cuesta
+     * latencia, y el punto de esta app es no tener latencia.
+     */
+    var stabilization by mutableStateOf(0.15f)
+
+    /**
+     * Gamma de la curva de presion. Menor a 1 engorda el trazo antes (mas
+     * sensible), mayor a 1 exige apretar mas.
+     */
+    var pressureGamma by mutableStateOf(1f)
+
     /** Cada herramienta recuerda su propio color y grosor. */
     private val toolColors = mutableStateMapOf<EditorTool, Long>()
-    private val toolSizes = mutableStateMapOf<EditorTool, Float>()
+    private val toolSizes = mutableStateMapOf<EditorTool, Int>()
 
     var pdfBackground by mutableStateOf<Bitmap?>(null)
         private set
@@ -85,11 +97,16 @@ class EditorState(
     val colorLong: Long
         get() = toolColors[tool] ?: defaultColor(tool)
 
-    val sizePt: Float
+    /** Grosor de la herramienta actual en la escala 1..100 de la UI. */
+    val sizeValue: Int
         get() = toolSizes[tool] ?: BrushCatalog.defaultSize(tool.brushKind ?: BrushKind.PEN)
 
+    /** El mismo grosor en puntos de pagina, que es lo que consume el pincel. */
+    val sizePt: Float
+        get() = BrushCatalog.sizeToPoints(sizeValue)
+
     fun setColor(value: Long) { toolColors[tool] = value }
-    fun setSize(value: Float) { toolSizes[tool] = value }
+    fun setSize(value: Int) { toolSizes[tool] = value.coerceIn(1, 100) }
 
     private fun defaultColor(tool: EditorTool): Long = when (tool) {
         EditorTool.HIGHLIGHTER -> Color.pack(0x80FFEB3B.toInt())

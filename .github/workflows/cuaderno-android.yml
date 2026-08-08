@@ -26,12 +26,21 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build APKs
+        run: ./gradlew assembleDebug assembleRelease --stacktrace
 
-      - name: Upload APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: cuaderno-debug
           path: Cuaderno/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # El release es el que sirve para juzgar la latencia: sin R8 y con
+      # debuggable activo, un debug no es comparable con una app publicada.
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuaderno-release
+          path: Cuaderno/app/build/outputs/apk/release/*.apk
           if-no-files-found: error

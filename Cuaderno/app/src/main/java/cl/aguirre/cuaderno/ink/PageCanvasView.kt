@@ -29,7 +29,8 @@ import kotlin.math.max
  *
  *  - La capa mojada la maneja [InProgressStrokesView], que dibuja el trazo en
  *    curso con front buffer, sin esperar el ciclo normal de composicion.
- *  - La capa seca son los trazos ya terminados, que se redibujan aca en [onDraw].
+ *  - La capa seca son los trazos ya terminados, que viven rasterizados en un
+ *    bitmap de cache y se vuelcan de una sola pasada.
  *
  * Al levantar el lapiz el trazo pasa de una capa a la otra.
  *
@@ -45,27 +46,45 @@ class PageCanvasView @JvmOverloads constructor(
     private val inProgressView = InProgressStrokesView(context)
     private val renderer = CanvasStrokeRenderer.create()
     private val predictor: MotionEventPredictor by lazy { MotionEventPredictor.newInstance(this) }
+    private val conditioner = InputConditioner()
 
     // --- Estado de la pagina -------------------------------------------------
 
     var strokes: List<InkStroke> = emptyList()
         set(value) {
+            if (field === value) return
             field = value
             invalidate()
         }
 
     var template: PageTemplate = PageTemplate.GRID
-        set(value) { field = value; invalidate() }
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     var pageWidthPt: Float = 595f
-        set(value) { field = value; requestFit(); }
+        set(value) {
+            if (field == value) return
+            field = value
+            requestFit()
+        }
 
     var pageHeightPt: Float = 842f
-        set(value) { field = value; requestFit(); }
+        set(value) {
+            if (field == value) return
+            field = value
+            requestFit()
+        }
 
     /** Fondo rasterizado de la pagina del PDF, si el cuaderno viene de uno. */
     var pdfBackground: Bitmap? = null
-        set(value) { field = value; invalidate() }
+        set(value) {
+            if (field === value) return
+            field = value
+            invalidate()
+        }
 
     // --- Herramienta ---------------------------------------------------------
 
@@ -75,6 +94,16 @@ class PageCanvasView @JvmOverloads constructor(
 
     /** Radio del borrador en puntos de pagina. */
     var eraserRadiusPt: Float = 10f
+
+    /** 0 = sin estabilizacion, 1 = maxima. */
+    var stabilization: Float
+        get() = conditioner.stabilization
+        set(value) { conditioner.stabilization = value.coerceIn(0f, 1f) }
+
+    /** Menor a 1 engorda el trazo antes; mayor a 1 exige apretar mas. */
+    var pressureGamma: Float
+        get() = conditioner.pressureGamma
+        set(value) { conditioner.pressureGamma = value.coerceIn(0.2f, 4f) }
 
     /**
      * Si esta activo, el dedo nunca dibuja: solo hace zoom y desplaza. Es el
@@ -102,6 +131,22 @@ class PageCanvasView @JvmOverloads constructor(
     private val minZoomFactor = 1f
     private val maxZoomFactor = 8f
 
+    // --- Cache de la capa seca -----------------------------------------------
+
+    /**
+     * Los trazos secos se rasterizan una vez y despues solo se vuelcan.
+     *
+     * Sin esto, cada frame vuelve a recorrer y rasterizar la pagina completa: con
+     * la hoja vacia no se nota, pero a media pagina de apuntes el dibujado se
+     * degrada justo mientras alguien escribe, que es cuando peor se siente.
+     * Al terminar un trazo se pinta solo ese trazo encima del cache.
+     */
+    private var dryCache: Bitmap? = null
+    private var dryCanvas: Canvas? = null
+    private var drawnCount = 0
+    private var drawnLast: InkStroke? = null
+    private var cacheValid = false
+
     // --- Dibujo --------------------------------------------------------------
 
     private val shadowPaint = Paint().apply {
@@ -115,8 +160,6 @@ class PageCanvasView @JvmOverloads constructor(
     private val identity = Matrix()
     private val pageRect = RectF()
     private val srcRect = Rect()
-    // Reutilizados en onDraw: asignar en el camino de dibujo genera basura en
-    // cada frame, y aqui eso significa hacerlo mientras alguien escribe.
     private val destRect = RectF()
 
     // --- Entrada -------------------------------------------------------------
@@ -151,7 +194,22 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        releaseCache()
+        if (w > 0 && h > 0) {
+            dryCache = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            dryCanvas = Canvas(dryCache!!)
+        }
+        cacheValid = false
         if (needsFit || oldw == 0) fitToWidth()
+    }
+
+    private fun releaseCache() {
+        dryCanvas = null
+        dryCache?.recycle()
+        dryCache = null
+        drawnCount = 0
+        drawnLast = null
+        cacheValid = false
     }
 
     private fun requestFit() {
@@ -195,7 +253,10 @@ class PageCanvasView @JvmOverloads constructor(
         pageToView.postScale(zoom, zoom)
         pageToView.postTranslate(panX, panY)
         pageToView.invert(viewToPage)
-        onTransformChanged?.invoke(zoom / fitZoom)
+        // El cache esta rasterizado para una transformacion concreta: al cambiar
+        // el zoom o el desplazamiento hay que rehacerlo.
+        cacheValid = false
+        onTransformChanged?.invoke(if (fitZoom > 0f) zoom / fitZoom else 1f)
         invalidate()
     }
 
@@ -246,19 +307,45 @@ class PageCanvasView @JvmOverloads constructor(
         }
         canvas.restore()
 
-        // Los trazos secos se dibujan sobre el canvas sin transformar: el
-        // renderizador recibe la matriz y la usa tambien para decidir el nivel
-        // de detalle, cosa que no puede hacer si el canvas ya viene escalado.
-        canvas.save()
-        canvas.clipRect(pageRect)
-        for (inkStroke in strokes) {
+        syncDryCache()
+        dryCache?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+    }
+
+    /**
+     * Deja el cache al dia. Si lo unico que paso es que se agregaron trazos al
+     * final, pinta solo esos; si hubo borrado, deshacer o cambio de zoom, rehace
+     * la pagina completa.
+     */
+    private fun syncDryCache() {
+        val target = dryCanvas ?: return
+
+        val appendOnly = cacheValid &&
+            strokes.size >= drawnCount &&
+            (drawnCount == 0 || strokes.getOrNull(drawnCount - 1) === drawnLast)
+
+        if (!appendOnly) {
+            dryCache?.eraseColor(Color.TRANSPARENT)
+            drawnCount = 0
+        } else if (drawnCount == strokes.size) {
+            return
+        }
+
+        target.save()
+        target.concat(pageToView)
+        for (i in drawnCount until strokes.size) {
+            // El canvas ya lleva la transformacion; la matriz se pasa igual
+            // porque el renderizador la usa para elegir el nivel de detalle.
             renderer.draw(
-                canvas = canvas,
-                stroke = inkStroke.stroke,
+                canvas = target,
+                stroke = strokes[i].stroke,
                 strokeToScreenTransform = pageToView,
             )
         }
-        canvas.restore()
+        target.restore()
+
+        drawnCount = strokes.size
+        drawnLast = strokes.lastOrNull()
+        cacheValid = true
     }
 
     // --- Entrada -------------------------------------------------------------
@@ -305,44 +392,56 @@ class PageCanvasView @JvmOverloads constructor(
 
                 activeStylusPointerId = pointerId
                 hitPathBuilder.reset()
-                recordHitPoint(event, index)
+                conditioner.reset()
+
+                val conditioned = conditioner.condition(event, index)
+                val source = conditioned ?: event
+                recordHitPoint(source, source.findPointerIndex(pointerId).coerceAtLeast(0))
 
                 currentStrokeId = inProgressView.startStroke(
-                    event = event,
+                    event = source,
                     pointerId = pointerId,
                     brush = brush,
                     motionEventToWorldTransform = viewToPage,
                     strokeToWorldTransform = identity,
                 )
+                conditioned?.recycle()
             }
 
             MotionEvent.ACTION_MOVE -> {
                 val strokeId = currentStrokeId ?: return true
-                if (pointerIndexOf(event, activeStylusPointerId) < 0) return true
+                val moveIndex = pointerIndexOf(event, activeStylusPointerId)
+                if (moveIndex < 0) return true
+
+                val conditioned = conditioner.condition(event, moveIndex)
+                val source = conditioned ?: event
+                val sourceIndex = source.findPointerIndex(activeStylusPointerId).coerceAtLeast(0)
 
                 // Los puntos historicos son las muestras que el sensor entrego
                 // entre dos frames. Ignorarlos es lo que hace que las curvas
                 // salgan poligonales en tantas apps de dibujo.
-                val moveIndex = pointerIndexOf(event, activeStylusPointerId)
-                for (h in 0 until event.historySize) {
-                    recordHistoricalHitPoint(event, moveIndex, h)
+                for (h in 0 until source.historySize) {
+                    recordHistoricalHitPoint(source, sourceIndex, h)
                 }
-                recordHitPoint(event, moveIndex)
+                recordHitPoint(source, sourceIndex)
 
                 // La prediccion adelanta unos milisegundos la punta del trazo, que
-                // es lo que cierra la brecha visual que queda entre la punta del
-                // lapiz y la tinta. El evento predicho lo administra el predictor,
-                // no se recicla aqui.
-                predictor.record(event)
+                // es lo que cierra la brecha visual entre la punta del lapiz y la
+                // tinta. El evento predicho lo administra el predictor.
+                predictor.record(source)
                 val predicted = predictor.predict()
-                inProgressView.addToStroke(event, activeStylusPointerId, strokeId, predicted)
+                inProgressView.addToStroke(source, activeStylusPointerId, strokeId, predicted)
+                conditioned?.recycle()
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val strokeId = currentStrokeId ?: return true
                 if (pointerId != activeStylusPointerId) return true
-                recordHitPoint(event, index)
-                inProgressView.finishStroke(event, pointerId, strokeId)
+                val conditioned = conditioner.condition(event, index)
+                val source = conditioned ?: event
+                recordHitPoint(source, source.findPointerIndex(pointerId).coerceAtLeast(0))
+                inProgressView.finishStroke(source, pointerId, strokeId)
+                conditioned?.recycle()
                 activeStylusPointerId = MotionEvent.INVALID_POINTER_ID
             }
 
@@ -351,6 +450,7 @@ class PageCanvasView @JvmOverloads constructor(
                 currentStrokeId = null
                 activeStylusPointerId = MotionEvent.INVALID_POINTER_ID
                 hitPathBuilder.reset()
+                conditioner.reset()
             }
         }
         return true
@@ -462,6 +562,7 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onDetachedFromWindow() {
         inProgressView.removeFinishedStrokesListener(this)
+        releaseCache()
         super.onDetachedFromWindow()
     }
 

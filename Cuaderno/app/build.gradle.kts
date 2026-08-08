@@ -28,6 +28,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Firmado con la clave de depuracion a proposito: la app es de uso
+            // familiar y no va a una tienda, pero el build release tiene que ser
+            // instalable para poder medir la latencia real. Un debug corre sin
+            // R8 y con debuggable activo, y en una app de tinta eso se siente.
+            signingConfig = signingConfigs.getByName("debug")
         }
         debug {
             isMinifyEnabled = false

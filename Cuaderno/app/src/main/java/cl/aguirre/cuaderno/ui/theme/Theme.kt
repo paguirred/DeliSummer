@@ -52,6 +52,9 @@ fun CuadernoTheme(
  */
 fun Color.toPackedLong(): Long = android.graphics.Color.pack(toArgb())
 
+/** La vuelta: del Long empaquetado del pincel al Color de Compose. */
+fun Long.toComposeColor(): Color = Color(android.graphics.Color.toArgb(this))
+
 /** Paleta de tinta. Los valores son ARGB y se empaquetan a Long para el pincel. */
 object InkPalette {
     val colors = listOf(

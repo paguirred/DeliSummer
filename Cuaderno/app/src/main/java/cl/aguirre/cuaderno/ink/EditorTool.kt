@@ -2,7 +2,7 @@ package cl.aguirre.cuaderno.ink
 
 enum class EditorTool {
     PEN,
-    PENCIL,
+    FINELINER,
     MARKER,
     HIGHLIGHTER,
     ERASER,
@@ -13,7 +13,7 @@ enum class EditorTool {
     val brushKind: BrushKind?
         get() = when (this) {
             PEN -> BrushKind.PEN
-            PENCIL -> BrushKind.PENCIL
+            FINELINER -> BrushKind.FINELINER
             MARKER -> BrushKind.MARKER
             HIGHLIGHTER -> BrushKind.HIGHLIGHTER
             ERASER, PAN -> null

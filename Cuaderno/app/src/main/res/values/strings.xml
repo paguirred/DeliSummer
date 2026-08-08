@@ -16,7 +16,7 @@
     <string name="confirm_delete_body">Se borran todas sus páginas. No se puede deshacer.</string>
 
     <string name="tool_pen">Lápiz</string>
-    <string name="tool_pencil">Grafito</string>
+    <string name="tool_fineliner">Fineliner</string>
     <string name="tool_marker">Marcador</string>
     <string name="tool_highlighter">Resaltador</string>
     <string name="tool_eraser">Borrador</string>
@@ -41,5 +41,10 @@
     <string name="size">Grosor</string>
     <string name="exporting">Exportando…</string>
     <string name="export_failed">No se pudo exportar</string>
+    <string name="pen_settings">Ajustes del lápiz</string>
+    <string name="pressure_sensitivity">Sensibilidad de presión</string>
+    <string name="pressure_sensitivity_hint">Más a la derecha, el trazo engorda apretando menos.</string>
+    <string name="stabilization">Estabilización del trazo</string>
+    <string name="stabilization_hint">Suaviza el pulso. Subirla mucho agrega retardo: la tinta empieza a ir detrás de la punta.</string>
     <string name="import_failed">No se pudo importar el PDF</string>
 </resources>
