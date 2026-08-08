@@ -1,6 +1,7 @@
 plugins {
+    // AGP 9 trae soporte de Kotlin incorporado: aplicar ademas
+    // org.jetbrains.kotlin.android duplica la extension y falla el build.
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -33,15 +34,11 @@ android {
         }
     }
 
+    // Con Kotlin incorporado, jvmTarget hereda de targetCompatibility, asi que
+    // declararlo aparte seria repetirse y arriesgar que se desincronicen.
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlin {
-        compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        }
     }
 
     buildFeatures {

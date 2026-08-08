@@ -115,6 +115,9 @@ class PageCanvasView @JvmOverloads constructor(
     private val identity = Matrix()
     private val pageRect = RectF()
     private val srcRect = Rect()
+    // Reutilizados en onDraw: asignar en el camino de dibujo genera basura en
+    // cada frame, y aqui eso significa hacerlo mientras alguien escribe.
+    private val destRect = RectF()
 
     // --- Entrada -------------------------------------------------------------
 
@@ -236,7 +239,8 @@ class PageCanvasView @JvmOverloads constructor(
         val pdf = pdfBackground
         if (pdf != null && !pdf.isRecycled) {
             srcRect.set(0, 0, pdf.width, pdf.height)
-            canvas.drawBitmap(pdf, srcRect, RectF(0f, 0f, pageWidthPt, pageHeightPt), bitmapPaint)
+            destRect.set(0f, 0f, pageWidthPt, pageHeightPt)
+            canvas.drawBitmap(pdf, srcRect, destRect, bitmapPaint)
         } else {
             PageBackground.draw(canvas, template, pageWidthPt, pageHeightPt)
         }
@@ -352,7 +356,7 @@ class PageCanvasView @JvmOverloads constructor(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
-                val index = pointerIndexOf(event, event.getPointerId(0)).coerceAtLeast(0)
+                val index = 0
                 val removed = ArrayList<InkStroke>()
 
                 for (h in 0 until event.historySize) {
