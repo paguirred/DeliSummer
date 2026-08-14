@@ -33,6 +33,15 @@ class InputConditioner {
     /** 0 = sin afinado de extremos, 1 = maximo. */
     var taper: Float = 0.7f
 
+    /**
+     * Recibe cada muestra ya estabilizada, con la presion pasada por la curva
+     * pero **sin** la envolvente de extremos. Quien reconstruye el trazo al
+     * soltarlo aplica su propia envolvente, ahora si conociendolo entero.
+     */
+    var sampleSink: ((x: Float, y: Float, pressure: Float, timeMs: Long) -> Unit)? = null
+
+    private var shapedPressure = 0f
+
     var pressureFloor: Float = 0.05f
     var pressureCeiling: Float = 1f
 
@@ -75,11 +84,14 @@ class InputConditioner {
         for (h in 0 until event.historySize) {
             event.getHistoricalPointerCoords(pointerIndex, h, scratch)
             apply(scratch, isFinal = false)
-            result = append(result, event, event.getHistoricalEventTime(h))
+            val time = event.getHistoricalEventTime(h)
+            sampleSink?.invoke(scratch.x, scratch.y, shapedPressure, time)
+            result = append(result, event, time)
         }
 
         event.getPointerCoords(pointerIndex, scratch)
         apply(scratch, isFinal = ending)
+        sampleSink?.invoke(scratch.x, scratch.y, shapedPressure, event.eventTime)
         result = append(result, event, event.eventTime)
 
         return result
@@ -135,9 +147,10 @@ class InputConditioner {
         }
 
         val raw = coords.pressure.coerceIn(0f, 1f)
-        var value = if (pressureGamma == 1f) raw else raw.pow(pressureGamma)
-        value = value * envelope(isFinal)
-        coords.pressure = pressureFloor + value * (pressureCeiling - pressureFloor)
+        val value = if (pressureGamma == 1f) raw else raw.pow(pressureGamma)
+        shapedPressure = pressureFloor + value * (pressureCeiling - pressureFloor)
+        coords.pressure = pressureFloor +
+            value * envelope(isFinal) * (pressureCeiling - pressureFloor)
     }
 
     /**

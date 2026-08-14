@@ -15,6 +15,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.widget.FrameLayout
+import androidx.ink.brush.Brush
 import androidx.ink.authoring.InProgressStrokeId
 import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
@@ -52,6 +53,9 @@ class PageCanvasView @JvmOverloads constructor(
     private val predictor: MotionEventPredictor by lazy { MotionEventPredictor.newInstance(this) }
     private val conditioner = InputConditioner()
     private val scribbleDetector = ScribbleDetector()
+    private val recorder = StrokeRecorder()
+    private var currentBrush: Brush? = null
+    private val sinkPoint = FloatArray(2)
     private val perf = PerfMonitor()
 
     /**
@@ -240,6 +244,15 @@ class PageCanvasView @JvmOverloads constructor(
         setBackgroundColor(Color.parseColor("#EEF1F5"))
         addView(inProgressView)
         inProgressView.addFinishedStrokesListener(this)
+
+        // Cada muestra que pasa por el acondicionador se guarda en coordenadas
+        // de pagina, que es donde vivira el trazo reconstruido.
+        conditioner.sampleSink = { x, y, pressure, timeMs ->
+            sinkPoint[0] = x
+            sinkPoint[1] = y
+            viewToPage.mapPoints(sinkPoint)
+            recorder.add(sinkPoint[0], sinkPoint[1], pressure, timeMs)
+        }
     }
 
     // --- Ciclo de vida -------------------------------------------------------
@@ -575,6 +588,8 @@ class PageCanvasView @JvmOverloads constructor(
 
                 val kind = tool.brushKind ?: BrushKind.PEN
                 val brush = BrushCatalog.create(kind, colorLong, strokeSizePt)
+                currentBrush = brush
+                recorder.begin(event.eventTime)
 
                 activeStylusPointerId = pointerId
                 hitPathBuilder.reset()
@@ -771,8 +786,15 @@ class PageCanvasView @JvmOverloads constructor(
 
     override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
         val path = hitPathBuilder.build()
+        // Al soltar, el trazo ya se conoce entero, asi que se rehace con la
+        // envolvente completa. La capa mojada solo pudo afinar el comienzo,
+        // porque mientras se escribe nadie sabe donde va a terminar.
+        val brush = currentBrush
+        var rebuilt = if (brush != null) recorder.build(brush, conditioner.taper) else null
+        recorder.clear()
         for ((_, stroke) in strokes) {
-            onStrokeFinished?.invoke(InkStroke(stroke, path))
+            onStrokeFinished?.invoke(InkStroke(rebuilt ?: stroke, path))
+            rebuilt = null
         }
         inProgressView.removeFinishedStrokes(strokes.keys)
         currentStrokeId = null
